@@ -1,0 +1,50 @@
+# ==========================================
+# Voice-Enabled RAG System - Python Dependencies
+# ==========================================
+
+# Core Framework
+fastapi==0.110.0
+uvicorn==0.27.0
+pydantic==2.6.0
+pydantic-settings==2.2.0
+
+# HTTP Client
+httpx==0.26.0
+
+# Async Support
+anyio==4.2.0
+
+# Data Processing
+numpy==1.26.4
+
+# Testing
+pytest==8.0.0
+pytest-asyncio==0.23.3
+pytest-cov==4.1.0
+
+# Type Hints
+typing-extensions==4.11.0
+
+# Logging
+structlog==24.1.0
+
+# For production
+# gunicorn==21.2.0
+# pydantic[email]==2.6.0
+
+# Optional: For actual dataset download
+# datasets==2.18.0
+# huggingface_hub==0.20.3
+
+# Optional: For actual Qdrant
+# qdrant-client==1.8.0
+
+# Optional: For actual embeddings
+# sentence-transformers==2.2.2
+# torch==2.2.0
+
+# Development
+black==24.2.0
+isort==5.13.2
+flake8==6.1.0
+mypy==1.9.0
