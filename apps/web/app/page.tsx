@@ -4,39 +4,34 @@ import { useState } from 'react'
 import AudioRecorder from '../components/AudioRecorder'
 import AnswerDisplay from '../components/AnswerDisplay'
 import LoadingSpinner from '../components/LoadingSpinner'
+import { queryAPI, uploadAudio } from '../lib/api'
 
 export default function Home() {
   const [query, setQuery] = useState('')
   const [answer, setAnswer] = useState('')
   const [evidence, setEvidence] = useState<string[]>([])
   const [confidence, setConfidence] = useState(0)
+  const [grounded, setGrounded] = useState(false)
+  const [language, setLanguage] = useState('')
   const [latency, setLatency] = useState(0)
+  const [sttLatency, setSttLatency] = useState<number | undefined>(undefined)
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState('')
 
   const handleTextQuery = async () => {
     if (!query.trim()) return
-    
+
     setIsLoading(true)
     setError('')
-    
+    setSttLatency(undefined)
+
     try {
-      const response = await fetch('/api/query', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ query, language: 'en' }),
-      })
-      
-      if (!response.ok) {
-        throw new Error('Failed to get answer')
-      }
-      
-      const data = await response.json()
+      const data = await queryAPI({ query, language: 'en' })
       setAnswer(data.answer)
       setEvidence(data.evidence || [])
       setConfidence(data.confidence || 0)
+      setGrounded(data.grounded || false)
+      setLanguage(data.language || 'en')
       setLatency(data.latency_ms || 0)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unknown error')
@@ -51,26 +46,17 @@ export default function Home() {
     setQuery('')
     setAnswer('')
     setEvidence([])
-    
+
     try {
-      const formData = new FormData()
-      formData.append('file', audioBlob, 'recording.wav')
-      
-      const response = await fetch('/api/audio', {
-        method: 'POST',
-        body: formData,
-      })
-      
-      if (!response.ok) {
-        throw new Error('Failed to process audio')
-      }
-      
-      const data = await response.json()
+      const data = await uploadAudio(audioBlob)
       setQuery(data.transcript || '')
       setAnswer(data.answer || '')
       setEvidence(data.evidence || [])
       setConfidence(data.confidence || 0)
-      setLatency(data.latency_ms || 0)
+      setGrounded(data.grounded || false)
+      setLanguage(data.language || 'en')
+      setLatency(data.rag_latency_ms || 0)
+      setSttLatency(data.stt_latency_ms)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unknown error')
     } finally {
@@ -112,7 +98,7 @@ export default function Home() {
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
                 placeholder="Ask a question..."
-                className="flex-1 px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                className="flex-1 px-4 py-3 border border-gray-300 rounded-lg bg-white text-gray-900 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                 disabled={isLoading}
                 onKeyPress={(e) => e.key === 'Enter' && handleTextQuery()}
               />
@@ -147,7 +133,10 @@ export default function Home() {
               answer={answer}
               evidence={evidence}
               confidence={confidence}
+              grounded={grounded}
+              language={language}
               latency={latency}
+              sttLatency={sttLatency}
             />
           )}
         </div>

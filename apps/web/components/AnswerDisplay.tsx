@@ -7,15 +7,21 @@ export interface AnswerDisplayProps {
   answer: string
   evidence: string[]
   confidence: number
+  grounded: boolean
+  language: string
   latency: number
+  sttLatency?: number
 }
 
-export default function AnswerDisplay({ 
-  query, 
-  answer, 
-  evidence, 
-  confidence, 
-  latency 
+export default function AnswerDisplay({
+  query,
+  answer,
+  evidence,
+  confidence,
+  grounded,
+  language,
+  latency,
+  sttLatency,
 }: AnswerDisplayProps) {
   const [expanded, setExpanded] = useState(false)
 
@@ -52,24 +58,36 @@ export default function AnswerDisplay({
         </p>
       </div>
 
-      {/* Metrics */}
-      <div className="grid grid-cols-2 gap-4 mb-6">
+      {/* Metrics — mirrors the guide's "show the engineering" panel */}
+      <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 mb-6">
         <div className="bg-white rounded-lg p-4 shadow-sm">
-          <p className="text-sm text-gray-500 uppercase tracking-wider mb-1">
-            Confidence
-          </p>
-          <p className="text-2xl font-semibold text-blue-600">
-            {formatConfidence(confidence)}
+          <p className="text-sm text-gray-500 uppercase tracking-wider mb-1">Language</p>
+          <p className="text-lg font-semibold text-gray-800">{language || 'unknown'}</p>
+        </div>
+        <div className="bg-white rounded-lg p-4 shadow-sm">
+          <p className="text-sm text-gray-500 uppercase tracking-wider mb-1">Retrieval</p>
+          <p className="text-lg font-semibold text-gray-800">Hybrid</p>
+        </div>
+        <div className="bg-white rounded-lg p-4 shadow-sm">
+          <p className="text-sm text-gray-500 uppercase tracking-wider mb-1">Grounded</p>
+          <p className={`text-lg font-semibold ${grounded ? 'text-green-600' : 'text-red-600'}`}>
+            {grounded ? 'Yes' : 'No'}
           </p>
         </div>
         <div className="bg-white rounded-lg p-4 shadow-sm">
-          <p className="text-sm text-gray-500 uppercase tracking-wider mb-1">
-            Latency
-          </p>
-          <p className="text-2xl font-semibold text-green-600">
-            {formatLatency(latency)}
-          </p>
+          <p className="text-sm text-gray-500 uppercase tracking-wider mb-1">Confidence</p>
+          <p className="text-2xl font-semibold text-blue-600">{formatConfidence(confidence)}</p>
         </div>
+        <div className="bg-white rounded-lg p-4 shadow-sm">
+          <p className="text-sm text-gray-500 uppercase tracking-wider mb-1">RAG Latency</p>
+          <p className="text-2xl font-semibold text-green-600">{formatLatency(latency)}</p>
+        </div>
+        {sttLatency !== undefined && (
+          <div className="bg-white rounded-lg p-4 shadow-sm">
+            <p className="text-sm text-gray-500 uppercase tracking-wider mb-1">STT Latency</p>
+            <p className="text-2xl font-semibold text-green-600">{formatLatency(sttLatency)}</p>
+          </div>
+        )}
       </div>
 
       {/* Evidence */}

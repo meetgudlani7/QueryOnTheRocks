@@ -40,7 +40,8 @@ def _to_point_id(doc_id: str) -> str:
 class QdrantStore:
     """Qdrant vector database client with connection reuse and retries."""
 
-    def __init__(self, timeout_s: float = 10.0, max_retries: int = 2):
+    def __init__(self, timeout_s: Optional[float] = None, max_retries: int = 2):
+        timeout_s = timeout_s if timeout_s is not None else settings.RETRIEVAL_TIMEOUT_MS / 1000
         self.url = settings.QDRANT_URL.rstrip("/")
         self.api_key = settings.QDRANT_API_KEY
         self.collection = settings.QDRANT_COLLECTION
@@ -123,6 +124,14 @@ class QdrantStore:
                 f"Failed to create collection '{self.collection}': "
                 f"{create_resp.status_code} - {create_resp.text}"
             )
+
+    async def ping(self) -> bool:
+        """Lightweight readiness probe: does the collection respond?"""
+        try:
+            response = await self._request("GET", f"/collections/{self.collection}")
+            return response.status_code == 200
+        except QdrantError:
+            return False
 
     async def search(
         self,
@@ -233,6 +242,10 @@ def get_store() -> QdrantStore:
 
 async def search(query: str, k: int = 20, filter: Optional[Dict] = None) -> List[Dict[str, Any]]:
     return await get_store().search(query, k=k, filter=filter)
+
+
+async def ping() -> bool:
+    return await get_store().ping()
 
 
 async def upsert(documents: List[Dict[str, Any]], batch_size: int = 128) -> None:

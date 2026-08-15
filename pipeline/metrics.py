@@ -91,11 +91,12 @@ class MetricsCollector:
         Returns:
             Dictionary with summary statistics
         """
+        instance = cls()
         metrics = cls.get_metrics()
-        
+
         total_requests = sum(m["count"] for m in metrics.values())
         total_latency = sum(m["total_latency_ms"] for m in metrics.values())
-        
+
         return {
             "total_requests": total_requests,
             "total_latency_ms": total_latency,

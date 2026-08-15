@@ -66,13 +66,30 @@ class Settings(BaseSettings):
     CHUNK_MAX_PER_PASSAGE: int = 20
 
     # Guardrails
-    MIN_RETRIEVAL_SCORE: float = 0.3
+    # Normalized against the max possible RRF score (2/(RRF_CONSTANT+1), i.e.
+    # a document ranked #1 in both Qdrant and BM25) — 1.0 is a theoretical
+    # perfect match, not a raw RRF score. Provisional default pending real
+    # tuning against an evaluation set (roadmap Phase 11).
+    MIN_RETRIEVAL_SCORE: float = 0.15
     MAX_CONTEXT_CHUNKS: int = 5
     MAX_ANSWER_TOKENS: int = 150
 
+    # Cosine similarity floor between a generated answer and its cited
+    # evidence (see pipeline/guardrails.py's _groundedness_similarity) — an
+    # independent check that a "grounded: true" claim is actually supported
+    # by the passage cited, not just that the citation ID is real.
+    # Provisional default pending calibration against a real benchmark run.
+    MIN_GROUNDEDNESS_SIMILARITY: float = 0.35
+
     # Stage timeouts
     STT_TIMEOUT_MS: int = 5000
-    RETRIEVAL_TIMEOUT_MS: int = 500
+    # The guide's aspirational 500ms is far below measured reality: a warm
+    # Qdrant Cloud round-trip from this dev setup runs ~300-750ms. Setting
+    # the hard timeout at the aspirational number would make degrading to
+    # BM25-only the common case instead of the exception. 3000ms gives
+    # genuine headroom above observed normal latency while still catching
+    # real hangs; revisit once deployed nearer the Qdrant region.
+    RETRIEVAL_TIMEOUT_MS: int = 3000
     LLM_TIMEOUT_MS: int = 5000
 
     # Dataset streaming

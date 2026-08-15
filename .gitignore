@@ -12,8 +12,8 @@ dist/
 downloads/
 eggs/
 .eggs/
-lib/
-lib64/
+/lib/
+/lib64/
 parts/
 sdist/
 var/
@@ -58,21 +58,24 @@ logs/
 
 # Data
 # ==========================================
+# Downloaded/derived dataset artifacts only — small fixtures like
+# evaluation/queries.jsonl must stay tracked, so this is scoped to the
+# cache directory rather than a blanket *.jsonl/*.csv/*.parquet/*.npy rule.
 data/
-*.jsonl
-*.csv
-*.parquet
-*.npy
 
 # Qdrant
 # ==========================================
 qdrant_data/
 
-# Docker
+# Node / Next.js (apps/web)
 # ==========================================
-Dockerfile*
-docker-compose*
-.docker/
+node_modules/
+.next/
+out/
+next-env.d.ts
+*.tsbuildinfo
+npm-debug.log*
+yarn-error.log*
 
 # OS
 # ==========================================

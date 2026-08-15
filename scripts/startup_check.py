@@ -6,77 +6,74 @@ Verifies all external services are available.
 
 import asyncio
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 import httpx
 
 from config import configure_logging, settings
+from retrieval import qdrant_store
 
 logger = logging.getLogger(__name__)
 
 
-async def check_service(name: str, url: str, timeout: float = 5.0) -> bool:
-    """Check if a service is available."""
+async def check_qdrant() -> bool:
+    """Live probe against the configured collection, not just the Qdrant host."""
     try:
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            response = await client.get(url)
-            if response.status_code in (200, 401, 403):  # 401/403 means service is up
-                logger.info(f"{name}: OK")
-                return True
-            else:
-                logger.error(f"{name}: Failed with status {response.status_code}")
-                return False
+        ok = await qdrant_store.ping()
+        logger.info(f"Qdrant: {'OK' if ok else 'FAILED'} (collection '{settings.QDRANT_COLLECTION}')")
+        return ok
     except Exception as e:
-        logger.error(f"{name}: Error - {e}")
+        logger.error(f"Qdrant: Error - {e}")
+        return False
+
+
+async def check_groq() -> bool:
+    """Live models-list call, not just a check that a key string is present."""
+    if not settings.GROQ_API_KEY:
+        logger.warning("Groq: API key not configured")
+        return False
+    try:
+        async with httpx.AsyncClient(timeout=settings.LLM_TIMEOUT_MS / 1000) as client:
+            response = await client.get(
+                "https://api.groq.com/openai/v1/models",
+                headers={"Authorization": f"Bearer {settings.GROQ_API_KEY}"},
+            )
+        ok = response.status_code == 200
+        logger.info(f"Groq: {'OK' if ok else f'FAILED ({response.status_code})'}")
+        return ok
+    except httpx.HTTPError as e:
+        logger.error(f"Groq: Error - {e}")
         return False
 
 
 async def main():
     """Check all external services."""
-    start_time = datetime.utcnow()
-    
+    start_time = datetime.now(timezone.utc)
+
     try:
         configure_logging()
-        
         logger.info("Checking external services...")
-        
-        services = [
-            ("Qdrant", f"{settings.QDRANT_URL}/collections"),
+
+        results = [
+            ("Qdrant", await check_qdrant()),
+            ("Groq", await check_groq()),
         ]
-        
-        results = []
-        for name, url in services:
-            result = await check_service(name, url)
-            results.append((name, result))
-        
-        # Check Groq API
-        groq_ok = False
-        if settings.GROQ_API_KEY:
-            groq_ok = True  # Basic check - actual API call would need testing
-            logger.info("Groq: API key configured")
-        else:
-            logger.warning("Groq: API key not configured")
-        results.append(("Groq", groq_ok))
-        
-        end_time = datetime.utcnow()
-        duration = end_time - start_time
-        
-        # Summary
+
+        duration = datetime.now(timezone.utc) - start_time
         all_ok = all(result for _, result in results)
-        
-        logger.info(f"\nService Check Summary:")
+
+        logger.info("\nService Check Summary:")
         for name, result in results:
-            status = "OK" if result else "FAILED"
-            logger.info(f"  {name}: {status}")
-        
+            logger.info(f"  {name}: {'OK' if result else 'FAILED'}")
+
         logger.info(f"\nChecks completed in {duration.total_seconds():.2f} seconds")
-        
+
         if all_ok:
             logger.info("All services are healthy!")
             return 0
         else:
             logger.error("Some services are not available")
             return 1
-            
+
     except Exception as e:
         logger.error(f"Startup check failed: {e}", exc_info=True)
         return 1

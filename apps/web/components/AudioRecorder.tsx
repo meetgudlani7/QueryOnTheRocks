@@ -6,6 +6,18 @@ export interface AudioRecorderProps {
   onAudioSubmitted: (blob: Blob) => Promise<void>
 }
 
+// MediaRecorder doesn't support 'audio/wav' in any major browser — it
+// records webm/opus (Chrome/Firefox) or mp4/aac (Safari). Picking the
+// browser's real encoding (instead of just labeling the blob 'audio/wav')
+// keeps the file's declared type honest end to end, since the backend
+// forwards this content-type straight to Groq Whisper.
+const PREFERRED_MIME_TYPES = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/ogg']
+
+function getSupportedMimeType(): string | undefined {
+  if (typeof MediaRecorder === 'undefined') return undefined
+  return PREFERRED_MIME_TYPES.find((type) => MediaRecorder.isTypeSupported(type))
+}
+
 export default function AudioRecorder({ onAudioSubmitted }: AudioRecorderProps) {
   const [isRecording, setIsRecording] = useState(false)
   const [audioUrl, setAudioUrl] = useState('')
@@ -27,15 +39,16 @@ export default function AudioRecorder({ onAudioSubmitted }: AudioRecorderProps) 
       audioChunksRef.current = []
       
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
-      const mediaRecorder = new MediaRecorder(stream)
+      const mimeType = getSupportedMimeType()
+      const mediaRecorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream)
       mediaRecorderRef.current = mediaRecorder
-      
+
       mediaRecorder.ondataavailable = (event) => {
-        audioChunksRef.current.push(event.data)
+        if (event.data.size > 0) audioChunksRef.current.push(event.data)
       }
-      
+
       mediaRecorder.onstop = () => {
-        const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/wav' })
+        const audioBlob = new Blob(audioChunksRef.current, { type: mediaRecorder.mimeType || 'audio/webm' })
         const audioUrl = URL.createObjectURL(audioBlob)
         setAudioBlob(audioBlob)
         setAudioUrl(audioUrl)

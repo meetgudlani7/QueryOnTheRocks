@@ -28,8 +28,10 @@ class TextQueryResponse(BaseModel):
     answer: str
     evidence: list[str]
     confidence: float
+    grounded: bool
     latency_ms: float
     language: str
+    request_id: str
 
 
 @router.post("")
@@ -62,8 +64,10 @@ async def process_text_query(request: TextQueryRequest):
             answer=response.answer,
             evidence=response.evidence,
             confidence=response.confidence,
+            grounded=response.grounded,
             latency_ms=response.latency_ms,
             language=response.language,
+            request_id=response.request_id,
         )
         
         return JSONResponse(content=api_response.model_dump())

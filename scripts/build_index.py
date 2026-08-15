@@ -6,8 +6,14 @@ Downloads dataset, processes it, and builds indexes.
 
 import asyncio
 import logging
+import sys
 from pathlib import Path
 from datetime import datetime
+
+# Running this file directly (`python scripts/build_index.py`) puts this
+# file's own directory on sys.path, not the project root — without this,
+# `from ingestion import ...` below fails with ModuleNotFoundError.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from ingestion import download_dataset, normalize_data, chunk_documents, generate_embeddings, build_index
 from config import configure_logging, settings
