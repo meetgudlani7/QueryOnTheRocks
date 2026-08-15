@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from config import settings
 from retrieval import BM25Store, QdrantStore
+from retrieval.qdrant_store import QdrantError
 
 logger = logging.getLogger(__name__)
 
@@ -48,8 +49,13 @@ async def build_index(
     bm25_store = bm25_store or BM25Store()
 
     vector_size = len(documents[0]["embedding"])
-    await qdrant_store.ensure_collection(vector_size=vector_size)
 
+    # BM25 is a separate, local, reliable index — it must not be held
+    # hostage to Qdrant Cloud's availability. A single long bulk load
+    # already crashed once on a mid-run network failure that took the
+    # whole process (and therefore BM25) down with it; every Qdrant
+    # interaction here is now scoped so BM25 always gets built and saved
+    # from the full document set regardless of what happens to Qdrant.
     qdrant_docs = [
         {
             "id": doc["id"],
@@ -64,8 +70,18 @@ async def build_index(
         }
         for doc in documents
     ]
-    logger.info(f"Indexing {len(qdrant_docs)} documents to Qdrant collection '{qdrant_store.collection}'...")
-    await qdrant_store.upsert(qdrant_docs, batch_size=settings.QDRANT_UPSERT_BATCH_SIZE)
+    try:
+        await qdrant_store.ensure_collection(vector_size=vector_size)
+        logger.info(f"Indexing {len(qdrant_docs)} documents to Qdrant collection '{qdrant_store.collection}'...")
+        qdrant_upserted = await qdrant_store.upsert(qdrant_docs, batch_size=settings.QDRANT_UPSERT_BATCH_SIZE)
+        if qdrant_upserted < len(qdrant_docs):
+            logger.warning(
+                f"Qdrant only accepted {qdrant_upserted}/{len(qdrant_docs)} documents — BM25 will "
+                "still index all of them below, so the two stores will disagree on corpus size "
+                "until Qdrant's capacity/connectivity allows the rest to be upserted."
+            )
+    except QdrantError as e:
+        logger.error(f"Qdrant indexing failed entirely, continuing to BM25 regardless: {e}")
 
     bm25_docs = [
         {

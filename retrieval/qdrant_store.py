@@ -25,6 +25,25 @@ class QdrantError(Exception):
     pass
 
 
+_QUOTA_STATUS_CODES = {403, 429, 507}
+_QUOTA_KEYWORDS = ("quota", "storage limit", "disk", "insufficient", "plan limit", "capacity")
+
+
+def _looks_like_quota_exceeded(status_code: int, body: str) -> bool:
+    """
+    Heuristic: Qdrant Cloud's exact response for "account storage/point
+    quota exceeded" isn't publicly documented as a single stable
+    status+message, so this matches on the status codes and keywords such
+    a response would plausibly use, not an exact contract. Worst case if
+    it under-matches: upsert() raises QdrantError as it always did, no
+    regression.
+    """
+    if status_code not in _QUOTA_STATUS_CODES:
+        return False
+    body_lower = body.lower()
+    return any(keyword in body_lower for keyword in _QUOTA_KEYWORDS)
+
+
 def _to_point_id(doc_id: str) -> str:
     """
     Qdrant point IDs must be an unsigned integer or a UUID — arbitrary
@@ -41,18 +60,32 @@ class QdrantStore:
     """Qdrant vector database client with connection reuse and retries."""
 
     def __init__(self, timeout_s: Optional[float] = None, max_retries: int = 2):
-        timeout_s = timeout_s if timeout_s is not None else settings.RETRIEVAL_TIMEOUT_MS / 1000
+        self._timeout_s = timeout_s if timeout_s is not None else settings.RETRIEVAL_TIMEOUT_MS / 1000
         self.url = settings.QDRANT_URL.rstrip("/")
         self.api_key = settings.QDRANT_API_KEY
         self.collection = settings.QDRANT_COLLECTION
         self.max_retries = max_retries
+        # One client for the store's lifetime — avoids a fresh TCP/TLS
+        # handshake on every request, which matters for the latency budget.
+        self._client = self._new_client()
 
+    def _new_client(self) -> httpx.AsyncClient:
         headers = {"Content-Type": "application/json"}
         if self.api_key:
             headers["api-key"] = self.api_key
-        # One client for the store's lifetime — avoids a fresh TCP/TLS
-        # handshake on every request, which matters for the latency budget.
-        self._client = httpx.AsyncClient(timeout=timeout_s, headers=headers)
+        return httpx.AsyncClient(timeout=self._timeout_s, headers=headers)
+
+    async def _recreate_client(self) -> None:
+        """
+        Observed failure mode on a long bulk upsert: a single pooled
+        connection goes silently dead (OS still reports it ESTABLISHED,
+        zero bytes move either direction) and every subsequent request
+        keeps getting handed that same connection. Closing and replacing
+        the client forces new TCP/TLS connections for what follows.
+        """
+        old_client = self._client
+        self._client = self._new_client()
+        await old_client.aclose()
 
     async def close(self) -> None:
         await self._client.aclose()
@@ -181,7 +214,7 @@ class QdrantStore:
         logger.debug(f"Qdrant search completed in {latency_ms:.2f}ms, {len(transformed)} results")
         return transformed
 
-    async def upsert(self, documents: List[Dict[str, Any]], batch_size: int = 128) -> None:
+    async def upsert(self, documents: List[Dict[str, Any]], batch_size: int = 128) -> int:
         """
         Upsert documents into Qdrant, chunked into batches — a single
         request with tens of thousands of points can time out or be
@@ -189,11 +222,25 @@ class QdrantStore:
 
         Each document is expected to look like:
             {"id": str, "vector": List[float], "payload": Dict}
+
+        Returns:
+            Number of points actually upserted. This can be less than
+            len(documents) if the account's plan storage/point quota is
+            hit partway through (see _looks_like_quota_exceeded) — an
+            expected stopping condition, not a crash. A batch that fails
+            for any other reason (e.g. a transport error that outlasts
+            _request's own retries — real, observed failure mode on a long
+            bulk load) is logged and skipped rather than aborting every
+            remaining batch: losing a few hundred points out of hundreds
+            of thousands is far better than losing everything upserted so
+            far, including in prior batches this call already succeeded on.
         """
         if not documents:
-            return
+            return 0
 
         total = 0
+        failed_batches = 0
+        consecutive_failures = 0
         for start in range(0, len(documents), batch_size):
             batch = documents[start:start + batch_size]
             points = []
@@ -213,13 +260,43 @@ class QdrantStore:
             if not points:
                 continue
 
-            response = await self._request(
-                "PUT", f"/collections/{self.collection}/points", json={"points": points}
-            )
+            try:
+                response = await self._request(
+                    "PUT", f"/collections/{self.collection}/points", json={"points": points}
+                )
+            except QdrantError as e:
+                failed_batches += 1
+                consecutive_failures += 1
+                logger.warning(f"Skipping batch at offset {start} after it failed outright: {e}")
+                if consecutive_failures >= 3:
+                    logger.warning(
+                        f"{consecutive_failures} consecutive batch failures — replacing the "
+                        "connection in case the pooled one has gone stale, then continuing."
+                    )
+                    await self._recreate_client()
+                    consecutive_failures = 0
+                continue
+            consecutive_failures = 0
+
             if response.status_code not in (200, 201):
-                raise QdrantError(f"Qdrant upsert batch failed: {response.status_code} - {response.text}")
+                if _looks_like_quota_exceeded(response.status_code, response.text):
+                    logger.warning(
+                        f"Qdrant appears to have hit its storage/point quota after {total} points "
+                        f"upserted ({response.status_code} - {response.text}); stopping here rather "
+                        "than discarding what's already indexed."
+                    )
+                    return total
+                failed_batches += 1
+                logger.warning(
+                    f"Skipping batch at offset {start}: {response.status_code} - {response.text}"
+                )
+                continue
             total += len(points)
             logger.debug(f"Upserted batch: {len(points)} points ({total}/{len(documents)} total)")
+
+        if failed_batches:
+            logger.warning(f"Upsert finished with {failed_batches} failed batch(es) skipped; {total} points upserted successfully.")
+        return total
 
         logger.info(f"Upserted {total} documents to Qdrant collection '{self.collection}'")
 
@@ -248,8 +325,8 @@ async def ping() -> bool:
     return await get_store().ping()
 
 
-async def upsert(documents: List[Dict[str, Any]], batch_size: int = 128) -> None:
-    await get_store().upsert(documents, batch_size=batch_size)
+async def upsert(documents: List[Dict[str, Any]], batch_size: int = 128) -> int:
+    return await get_store().upsert(documents, batch_size=batch_size)
 
 
 async def ensure_collection(vector_size: Optional[int] = None, distance: str = "Cosine") -> None:

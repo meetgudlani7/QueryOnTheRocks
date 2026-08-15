@@ -3,7 +3,10 @@ Dataset Download Module
 
 Fetches a bounded sample of AI4Bharat MSMARCO-XI spanning several Indic
 languages, without ever attempting a full download of the dataset (~10M
-rows / ~49GB across 13 parquet shards, each ~3.7GB).
+rows / ~49GB across 13 parquet shards, each ~3.7GB). Shards are processed
+one at a time — downloaded, sampled, then deleted (see keep_raw_shards) —
+so disk usage peaks at one shard's size no matter how many are sampled
+from.
 
 Four things about this specific dataset drove the design below, confirmed
 by hand before writing this code (see IMPLEMENTATION_ROADMAP.md Phase 1):
@@ -157,13 +160,14 @@ async def download_dataset(
     num_language_shards: int = 3,
     max_retries: int = 3,
     shard_download_timeout_s: float = 1800.0,
+    keep_raw_shards: bool = False,
 ) -> List[Dict[str, Any]]:
     """
     Fetch a bounded sample of MSMARCO-XI spanning several target languages.
 
     Args:
-        output_dir: local cache directory (both raw shards and the combined
-            sample are cached here)
+        output_dir: local cache directory (the combined sample is always
+            cached here; raw shards only stick around if keep_raw_shards)
         dataset_name: HuggingFace dataset id
         split: "train" or "validation"
         limit: total rows to return across all sampled shards combined.
@@ -173,14 +177,18 @@ async def download_dataset(
         seed: selects which shards (languages) are sampled and makes the
             selection reproducible across runs
         num_language_shards: how many different language shards to pull
-            from. Each shard is ~3.7GB to download (one-time, cached) — the
-            default of 3 means ~11GB total for English + 2 Indic languages.
-            Raise this for broader language coverage at the cost of more
-            bandwidth/disk; the full dataset has 13 train-split shards.
+            from. Each shard is ~3.7GB to download — processed one at a
+            time (download, sample, then delete unless keep_raw_shards),
+            so disk usage peaks at one shard regardless of how many are
+            sampled; the full dataset has 13 train-split shards.
         max_retries: retries on transient network failures, per shard
         shard_download_timeout_s: hard cap on each shard's one-time
             download; a hung download must still fail cleanly rather than
             block forever.
+        keep_raw_shards: keep each ~3.7GB shard file after sampling from it
+            instead of deleting it immediately. Off by default — the raw
+            shard is single-use scratch space for DuckDB, not something
+            worth its disk cost long-term; re-running re-downloads.
 
     Raises:
         DownloadError: network/dataset failure after retries, or zero
@@ -236,7 +244,12 @@ async def download_dataset(
                         _download_shard(shard["url"], shard_path, client, shard.get("size")),
                         timeout=shard_download_timeout_s,
                     )
-                    shard_records = await asyncio.to_thread(_read_shard_rows, shard_path, per_shard_limit)
+                    try:
+                        shard_records = await asyncio.to_thread(_read_shard_rows, shard_path, per_shard_limit)
+                    finally:
+                        if not keep_raw_shards:
+                            shard_path.unlink(missing_ok=True)
+                            logger.info(f"Deleted {shard_path.name} after sampling (keep_raw_shards=False)")
                     if per_shard_final_cap is not None:
                         shard_records = shard_records[:per_shard_final_cap]
                     logger.info(f"Using {len(shard_records)} usable rows from {shard['filename']} (target_lang={shard_records[0].get('target_lang') if shard_records else 'n/a'})")
