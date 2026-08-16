@@ -1,0 +1,87 @@
+name: CI
+
+# Roadmap Phase 24. Two jobs, deliberately split by whether they need
+# secrets a fork PR can't have:
+#
+# - `test` runs on every push and PR, no secrets required. Verified
+#   locally before this file was written: `pytest -m "not live"` passes
+#   126/126 with .env removed and GROQ_API_KEY/QDRANT_URL/QDRANT_API_KEY
+#   unset, simulating a genuinely fresh checkout — see
+#   OPTIMIZATION_ROADMAP.md Phase 24 for that verification.
+# - `live-test` only runs on pushes to main or manual dispatch (never on
+#   `pull_request`), so it never runs against a fork PR that couldn't see
+#   repository secrets anyway. It needs GROQ_API_KEY (Settings > Secrets
+#   and variables > Actions) to do anything meaningful.
+#
+# Known, deliberate gap: scripts/smoke_test.py needs a pre-built BM25
+# index (data/bm25_index.pkl, ~422MB, correctly gitignored — see
+# .gitignore) and a populated Qdrant collection, neither of which exist in
+# a fresh checkout and aren't practical to build inside a CI job (real
+# ingestion takes hours). Its BM25-dependent checks (5, 7, 10) are
+# expected to fail here; it's included as continue-on-error, informational
+# only, valuable when this workflow is adapted to run somewhere the data
+# already exists (e.g. a self-hosted runner with persistent storage).
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: Unit tests (no live services)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run tests (excludes anything needing live Groq credentials)
+        run: pytest -m "not live" -q
+
+  live-test:
+    name: Live tests (needs GROQ_API_KEY)
+    runs-on: ubuntu-latest
+    # Never on pull_request — a fork PR has no access to repository
+    # secrets, so this would just fail predictably and noisily.
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    needs: test
+    env:
+      GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+      QDRANT_URL: ${{ secrets.QDRANT_URL }}
+      QDRANT_API_KEY: ${{ secrets.QDRANT_API_KEY }}
+      QDRANT_COLLECTION: ${{ secrets.QDRANT_COLLECTION }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Check GROQ_API_KEY is configured
+        run: |
+          if [ -z "$GROQ_API_KEY" ]; then
+            echo "::warning::GROQ_API_KEY secret is not configured — skipping live checks. Add it under Settings > Secrets and variables > Actions to enable this job."
+            exit 0
+          fi
+          echo "GROQ_API_KEY is configured."
+
+      - name: Run live tests (real Groq calls)
+        if: env.GROQ_API_KEY != ''
+        run: pytest -m live -q
+
+      - name: Smoke test (informational — needs a pre-built BM25 index/Qdrant collection this checkout doesn't have)
+        if: env.GROQ_API_KEY != ''
+        continue-on-error: true
+        run: python scripts/smoke_test.py

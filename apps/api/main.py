@@ -12,9 +12,10 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from apps.api.routes import health, audio, query
-from apps.api.middleware import timing
-from config import configure_logging
+from apps.api.middleware import timing, concurrency, rate_limit
+from config import configure_logging, settings
 from retrieval import embeddings as embedding_engine
+from retrieval import reranker
 from retrieval import qdrant_store, bm25_store
 
 logger = logging.getLogger(__name__)
@@ -36,6 +37,16 @@ async def lifespan(app: FastAPI):
         # work, and the error will surface clearly on the first real query.
         logger.error(f"Embedding model preload failed, will retry lazily on first request: {e}")
 
+    if settings.RERANKING_ENABLED:
+        logger.info("Startup: preloading reranker model (RERANKING_ENABLED=true)...")
+        try:
+            await asyncio.to_thread(reranker.preload)
+        except Exception as e:
+            # Same posture as the embedding preload above: don't block
+            # startup, rerank_evidence() already fails open to fusion
+            # order if the model never loads.
+            logger.error(f"Reranker model preload failed, will retry lazily on first use: {e}")
+
     qdrant_store.get_store()
     bm25_store.get_store()
     logger.info("Startup complete")
@@ -56,10 +67,23 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# CORS middleware
+# Registration order matters: Starlette's last-registered middleware
+# becomes the outermost layer. concurrency_limit_middleware and
+# rate_limit_middleware are registered first (innermost) specifically so
+# CORSMiddleware (registered after) still wraps them and adds
+# Access-Control-* headers even to a 503/429 either one generates — see
+# apps/api/middleware/concurrency.py's docstring for why this ordering
+# isn't arbitrary (verified live: a 503 registered outside CORS produces
+# an opaque browser network error instead of a readable response).
+app.middleware("http")(concurrency.concurrency_limit_middleware)
+app.middleware("http")(rate_limit.rate_limit_middleware)
+
+# CORS middleware — explicit allow-list (roadmap Phase 23), not a
+# wildcard. CORS_ALLOWED_ORIGINS defaults to the local dev frontend only;
+# set it explicitly for any other deployment.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Adjust for production
+    allow_origins=[o.strip() for o in settings.CORS_ALLOWED_ORIGINS.split(",") if o.strip()],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

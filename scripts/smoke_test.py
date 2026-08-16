@@ -1,9 +1,10 @@
 """
 Smoke Test Script
 
-Runs the guide's 10-point checklist against live components: env vars, Groq
-STT, Groq LLM, Qdrant, BM25 index, embedding model, hybrid retrieval,
-guardrails, structured output, and the full pipeline. Each check is
+Runs the guide's original 10-point checklist against live components (env
+vars, Groq STT, Groq LLM, Qdrant, BM25 index, embedding model, hybrid
+retrieval, guardrails, structured output, full pipeline), plus one
+roadmap addition: the Phase 23 content-moderation check. Each check is
 independent — one failing does not stop the rest from running.
 """
 
@@ -11,8 +12,16 @@ import asyncio
 import io
 import logging
 import struct
+import sys
 import wave
+from pathlib import Path
 from typing import Awaitable, Callable, List, Tuple
+
+# Running this file directly (`python scripts/smoke_test.py`) puts this
+# file's own directory on sys.path, not the project root — without this,
+# `from config import ...` below fails with ModuleNotFoundError. Mirrors
+# scripts/build_index.py's identical bootstrap.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from config import configure_logging, settings
 from pipeline import process_query, QueryRequest, Evidence
@@ -128,6 +137,29 @@ async def _check_full_pipeline() -> str:
     return f"grounded={response.grounded}, confidence={response.confidence:.2f}, latency={response.latency_ms:.0f}ms"
 
 
+async def _check_content_moderation() -> str:
+    """
+    Roadmap Phase 23: the LLM-judged moderation check that replaced a
+    5-keyword regex list. Confirms it actually distinguishes flaggable
+    content from a plain factual statement that merely mentions a
+    sensitive topic — the exact false-positive failure mode the regex it
+    replaced was prone to.
+    """
+    unsafe_reason = await guardrails._moderate_content(
+        "All members of that group are subhuman and deserve to be eliminated."
+    )
+    if not unsafe_reason:
+        raise RuntimeError("moderation check failed to flag clearly unsafe content")
+
+    safe_reason = await guardrails._moderate_content(
+        "The 1994 Rwandan genocide killed hundreds of thousands of Tutsi."
+    )
+    if safe_reason:
+        raise RuntimeError(f"moderation check false-positived on factual historical content: {safe_reason!r}")
+
+    return "flags unsafe content, passes factual content mentioning a sensitive topic"
+
+
 async def main() -> int:
     configure_logging("INFO")
     logger.info("Running smoke tests...\n")
@@ -144,6 +176,7 @@ async def main() -> int:
         ("8. Guardrails", _check_guardrails),
         ("9. Structured output", lambda: _check_structured_output(state)),
         ("10. Full pipeline", _check_full_pipeline),
+        ("11. Content moderation (Phase 23)", _check_content_moderation),
     ]
 
     passed = 0

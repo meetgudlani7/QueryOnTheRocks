@@ -4,7 +4,7 @@ import { useState } from 'react'
 import AudioRecorder from '../components/AudioRecorder'
 import AnswerDisplay from '../components/AnswerDisplay'
 import LoadingSpinner from '../components/LoadingSpinner'
-import { queryAPI, uploadAudio } from '../lib/api'
+import { queryAPIStream, uploadAudio, StreamEvent } from '../lib/api'
 
 export default function Home() {
   const [query, setQuery] = useState('')
@@ -16,27 +16,75 @@ export default function Home() {
   const [latency, setLatency] = useState(0)
   const [sttLatency, setSttLatency] = useState<number | undefined>(undefined)
   const [isLoading, setIsLoading] = useState(false)
+  const [verifying, setVerifying] = useState(false)
+  const [unverifiedReason, setUnverifiedReason] = useState('')
   const [error, setError] = useState('')
 
+  // Text queries stream (roadmap Phase 21): answer text renders as it
+  // arrives instead of waiting for the full retrieve-generate-validate
+  // pipeline to finish. Voice queries (handleAudioSubmitted, below) still
+  // use the non-streaming /api/audio path — STT has to complete before
+  // RAG can even start, so the perceived-latency win streaming buys on
+  // text is much smaller there, and it's out of this phase's scope.
   const handleTextQuery = async () => {
     if (!query.trim()) return
 
     setIsLoading(true)
     setError('')
     setSttLatency(undefined)
+    setAnswer('')
+    setEvidence([])
+    setConfidence(0)
+    setGrounded(false)
+    setUnverifiedReason('')
+    setVerifying(false)
+
+    let streamedAnswer = ''
+
+    const onEvent = (event: StreamEvent) => {
+      switch (event.type) {
+        case 'token':
+          streamedAnswer += event.text || ''
+          setAnswer(streamedAnswer)
+          setIsLoading(false) // first token arrived — the answer card itself now shows progress
+          setVerifying(true)
+          break
+        case 'refused':
+          setAnswer(event.reason || "I couldn't find enough information in the knowledge base to answer that.")
+          setEvidence(event.evidence || [])
+          setConfidence(event.confidence || 0)
+          setVerifying(false)
+          setIsLoading(false)
+          break
+        case 'unverified':
+          setEvidence(event.evidence || [])
+          setUnverifiedReason(event.reason || 'This answer could not be confirmed as grounded.')
+          setVerifying(false)
+          setIsLoading(false)
+          break
+        case 'verified':
+          setEvidence(event.evidence || [])
+          setConfidence(event.confidence || 0)
+          setGrounded(event.grounded || false)
+          setLatency(event.latency_ms || 0)
+          setLanguage('en')
+          setVerifying(false)
+          setIsLoading(false)
+          break
+        case 'error':
+          setError(event.message || 'Streaming query failed')
+          setVerifying(false)
+          setIsLoading(false)
+          break
+      }
+    }
 
     try {
-      const data = await queryAPI({ query, language: 'en' })
-      setAnswer(data.answer)
-      setEvidence(data.evidence || [])
-      setConfidence(data.confidence || 0)
-      setGrounded(data.grounded || false)
-      setLanguage(data.language || 'en')
-      setLatency(data.latency_ms || 0)
+      await queryAPIStream({ query, language: 'en' }, onEvent)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unknown error')
-    } finally {
       setIsLoading(false)
+      setVerifying(false)
     }
   }
 
@@ -137,6 +185,8 @@ export default function Home() {
               language={language}
               latency={latency}
               sttLatency={sttLatency}
+              verifying={verifying}
+              unverifiedReason={unverifiedReason}
             />
           )}
         </div>

@@ -4,6 +4,7 @@ BM25 Keyword Search Store
 Handles keyword search using BM25 algorithm.
 """
 
+import asyncio
 import time
 import logging
 import pickle
@@ -48,62 +49,82 @@ class BM25Store:
     ) -> List[Dict[str, Any]]:
         """
         Search for documents matching the query using BM25.
-        
+
         Args:
             query: Query text
             k: Number of results to return
-            
+
         Returns:
             List of result documents with scores
-            
+
         Raises:
             BM25Error: If search fails
         """
+        if not self._initialized:
+            raise BM25Error("BM25 index not initialized")
+
         start_time = time.perf_counter()
-        
+
         try:
-            if not self._initialized:
-                raise BM25Error("BM25 index not initialized")
-            
-            # Tokenize query
-            query_terms = self._tokenize(query)
-            
-            # Calculate BM25 scores for each document
-            scores = []
-            for doc_id in range(self.total_docs):
-                score = 0.0
-                for term in query_terms:
-                    if term in self.inverted_index and doc_id in self.inverted_index[term]:
-                        tf = self.inverted_index[term][doc_id]
-                        idf = self._idf(term)
-                        score += self._bm25_score(tf, idf, self.doc_lengths[doc_id])
-                
-                if score > 0:
-                    scores.append((-score, doc_id))  # Negative for min-heap
-            
-            # Get top k results
-            top_k = heapq.nsmallest(k, scores)
-            
-            # Transform results
-            results = []
-            for neg_score, doc_id in top_k:
-                doc = self.documents[doc_id]
-                results.append({
-                    "passage": doc.get("passage", ""),
-                    "score": -neg_score,
-                    "document_id": doc.get("id", str(doc_id)),
-                    "language": doc.get("language", "en"),
-                    "metadata": doc.get("metadata", {}),
-                })
-            
+            # The scoring scan below is CPU-bound, synchronous Python — run
+            # it in a worker thread so it never blocks the FastAPI event
+            # loop while other requests are in flight (mirrors
+            # retrieval/embeddings.py's asyncio.to_thread pattern). Without
+            # this, every concurrent request stalls behind whichever one is
+            # mid-scan, since nothing here ever yields to the loop.
+            results = await asyncio.to_thread(self._search_sync, query, k)
+
             latency_ms = (time.perf_counter() - start_time) * 1000
             logger.debug(f"BM25 search completed in {latency_ms:.2f}ms")
-            
+
             return results
-            
+
         except Exception as e:
             logger.error(f"BM25 search failed: {e}", exc_info=True)
             raise BM25Error(f"BM25 search failed: {e}")
+
+    def _search_sync(self, query: str, k: int) -> List[Dict[str, Any]]:
+        """
+        Blocking BM25 scoring — must run off the event loop (see search()).
+
+        Scores only documents that actually contain at least one query
+        term, by walking each term's own postings list, instead of the
+        previous approach of looping every indexed document
+        (`range(self.total_docs)`) and checking postings membership per
+        document per term — that was O(total_docs * query_terms)
+        regardless of how few documents actually matched, which at this
+        corpus's size (400K+ docs) meant scanning the entire index on
+        every single query. This produces mathematically identical scores
+        and ranking: a document that appears in zero of the query's terms'
+        postings always scored exactly 0 before too, so skipping it changes
+        nothing about which documents make the top k or their scores.
+        """
+        query_terms = self._tokenize(query)
+
+        scores: Dict[int, float] = defaultdict(float)
+        for term in query_terms:
+            postings = self.inverted_index.get(term)
+            if not postings:
+                continue
+            idf = self._idf(term)
+            for doc_id, tf in postings.items():
+                scores[doc_id] += self._bm25_score(tf, idf, self.doc_lengths[doc_id])
+
+        # Negative score for min-heap; ties break on doc_id, same as before.
+        scored = [(-score, doc_id) for doc_id, score in scores.items() if score > 0]
+        top_k = heapq.nsmallest(k, scored)
+
+        results = []
+        for neg_score, doc_id in top_k:
+            doc = self.documents[doc_id]
+            results.append({
+                "passage": doc.get("passage", ""),
+                "score": -neg_score,
+                "document_id": doc.get("id", str(doc_id)),
+                "language": doc.get("language", "en"),
+                "metadata": doc.get("metadata", {}),
+            })
+        return results
     
     async def add_documents(
         self,

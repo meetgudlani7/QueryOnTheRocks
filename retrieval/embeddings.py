@@ -14,7 +14,7 @@ dense search only works if both sides embed the same way.
 import asyncio
 import logging
 import threading
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 from config import settings
 
@@ -129,10 +129,99 @@ async def embed_texts(texts: List[str], batch_size: Optional[int] = None) -> Lis
         raise EmbeddingError(f"Embedding generation failed: {e}") from e
 
 
+class _EmbeddingBatcher:
+    """
+    Coalesces concurrent embed_query() calls arriving within a short
+    window into one batched model.encode() call (roadmap Phase 22). Every
+    call still goes through the identical _encode_sync() that
+    embed_texts() uses — batching changes only how inputs are grouped
+    before that call, never the resulting vectors (see
+    tests/test_embeddings.py for the equivalence proof).
+
+    A batch flushes on whichever comes first: max_batch_size callers have
+    joined it, or window_s has elapsed since the first caller joined.
+    """
+
+    def __init__(self, window_s: float, max_batch_size: int):
+        self._window_s = window_s
+        self._max_batch_size = max_batch_size
+        self._pending: List[Tuple[str, "asyncio.Future[List[float]]"]] = []
+        self._lock = asyncio.Lock()
+        self._flush_task: Optional[asyncio.Task] = None
+
+    async def embed(self, text: str) -> List[float]:
+        loop = asyncio.get_event_loop()
+        future: "asyncio.Future[List[float]]" = loop.create_future()
+
+        async with self._lock:
+            self._pending.append((text, future))
+            if len(self._pending) >= self._max_batch_size:
+                self._trigger_immediate_flush_locked()
+            elif self._flush_task is None:
+                self._flush_task = asyncio.create_task(self._flush_after_delay())
+
+        return await future
+
+    def _trigger_immediate_flush_locked(self) -> None:
+        """Caller must already hold self._lock."""
+        if self._flush_task is not None:
+            self._flush_task.cancel()
+            self._flush_task = None
+        asyncio.create_task(self._flush())
+
+    async def _flush_after_delay(self) -> None:
+        try:
+            await asyncio.sleep(self._window_s)
+        except asyncio.CancelledError:
+            return  # an immediate (max-batch-size) flush already claimed this batch
+        await self._flush()
+
+    async def _flush(self) -> None:
+        async with self._lock:
+            batch = self._pending
+            self._pending = []
+            self._flush_task = None
+        if not batch:
+            return
+
+        texts = [t for t, _ in batch]
+        try:
+            vectors = await asyncio.to_thread(_encode_sync, texts, len(texts))
+        except Exception as e:
+            error = e if isinstance(e, EmbeddingError) else EmbeddingError(f"Embedding generation failed: {e}")
+            for _, future in batch:
+                if not future.done():
+                    future.set_exception(error)
+            return
+
+        for (_, future), vector in zip(batch, vectors):
+            if not future.done():
+                future.set_result(vector)
+
+
+_batcher: Optional[_EmbeddingBatcher] = None
+_batcher_lock = threading.Lock()
+
+
+def _get_batcher() -> _EmbeddingBatcher:
+    """Lazy singleton, guarded by threading.Lock — same reasoning as _load_model()/_model_lock above."""
+    global _batcher
+    if _batcher is None:
+        with _batcher_lock:
+            if _batcher is None:
+                _batcher = _EmbeddingBatcher(
+                    window_s=settings.EMBEDDING_MICROBATCH_WINDOW_MS / 1000,
+                    max_batch_size=settings.EMBEDDING_MICROBATCH_MAX_SIZE,
+                )
+    return _batcher
+
+
 async def embed_query(query: str) -> List[float]:
     """Embed a single query string — the hot path used on every search request."""
     if not query or not query.strip():
         raise EmbeddingError("Cannot embed an empty query")
+    if settings.EMBEDDING_MICROBATCH_ENABLED:
+        return await _get_batcher().embed(query)
     vectors = await embed_texts([query], batch_size=1)
     return vectors[0]
 

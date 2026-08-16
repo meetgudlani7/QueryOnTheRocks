@@ -6,8 +6,16 @@ Verifies all external services are available.
 
 import asyncio
 import logging
+import sys
 from datetime import datetime, timezone
+from pathlib import Path
 import httpx
+
+# Running this file directly (`python scripts/startup_check.py`) puts this
+# file's own directory on sys.path, not the project root — without this,
+# `from config import ...` below fails with ModuleNotFoundError. Mirrors
+# scripts/build_index.py's identical bootstrap.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from config import configure_logging, settings
 from retrieval import qdrant_store

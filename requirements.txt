@@ -54,6 +54,14 @@ torch>=2.2.0
 # plain REST via httpx, which already works identically against Qdrant
 # Cloud or a self-hosted instance.
 
+# Optional per-stage tracing (config/tracing.py, roadmap Phase 24) — only
+# needed if TRACING_ENABLED=true. config/tracing.py fails open (tracing
+# just stays disabled with a warning) if these aren't installed, so they
+# stay commented-optional rather than a hard dependency.
+# opentelemetry-api>=1.24.0
+# opentelemetry-sdk>=1.24.0
+# opentelemetry-exporter-otlp-proto-http>=1.24.0
+
 # Development
 black>=24.2.0
 isort>=5.13.2

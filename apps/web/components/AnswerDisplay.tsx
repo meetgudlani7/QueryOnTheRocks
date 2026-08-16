@@ -11,6 +11,15 @@ export interface AnswerDisplayProps {
   language: string
   latency: number
   sttLatency?: number
+  // Streaming-only (roadmap Phase 21): true while answer text has arrived
+  // but the post-hoc groundedness check hasn't finished yet — confidence/
+  // grounded below aren't final until this clears. Undefined/false for
+  // the non-streaming path, which has no provisional state at all.
+  verifying?: boolean
+  // Set when a streamed answer finished but failed post-hoc validation —
+  // the text was already shown to the user (can't be un-shown), so this
+  // flags it rather than hiding it.
+  unverifiedReason?: string
 }
 
 export default function AnswerDisplay({
@@ -22,6 +31,8 @@ export default function AnswerDisplay({
   language,
   latency,
   sttLatency,
+  verifying = false,
+  unverifiedReason,
 }: AnswerDisplayProps) {
   const [expanded, setExpanded] = useState(false)
 
@@ -55,8 +66,28 @@ export default function AnswerDisplay({
       <div className="answer-card mb-6">
         <p className="text-xl text-gray-800 leading-relaxed">
           {answer || 'No answer available'}
+          {verifying && <span className="inline-block w-2 h-5 ml-1 bg-blue-400 animate-pulse align-text-bottom" aria-hidden="true" />}
         </p>
       </div>
+
+      {/* Streaming-only provisional/verification status (roadmap Phase 21) —
+          the answer text above may already be fully shown while this is
+          still resolving, since post-hoc validation can only run after
+          generation finishes. */}
+      {verifying && (
+        <div className="mb-6 flex items-center gap-2 text-sm text-blue-600">
+          <span className="w-2 h-2 rounded-full bg-blue-500 animate-pulse" aria-hidden="true" />
+          Verifying answer against sources…
+        </div>
+      )}
+      {!verifying && unverifiedReason && (
+        <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 mb-6">
+          <p className="text-yellow-800 font-medium">Not fully verified</p>
+          <p className="text-yellow-700 text-sm mt-1">
+            This answer could not be confirmed as fully grounded in the retrieved sources: {unverifiedReason}
+          </p>
+        </div>
+      )}
 
       {/* Metrics — mirrors the guide's "show the engineering" panel */}
       <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 mb-6">

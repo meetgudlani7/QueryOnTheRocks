@@ -4,6 +4,8 @@ Speech-to-Text Module
 Handles audio transcription using Groq Whisper.
 """
 
+import asyncio
+import threading
 import time
 import logging
 from typing import Tuple, Optional
@@ -17,6 +19,24 @@ logger = logging.getLogger(__name__)
 class STTError(Exception):
     """Custom exception for STT errors."""
     pass
+
+
+# Lazily-created singleton, guarded by a threading.Lock rather than an
+# asyncio.Lock — mirrors retrieval/embeddings.py's _load_model()/_model_lock
+# pattern and pipeline/generation.py's identical semaphore (roadmap Phase
+# 22). Bounds concurrent in-flight Groq Whisper calls independently of the
+# LLM semaphore, since STT and generation are different Groq models/quotas.
+_stt_semaphore: Optional[asyncio.Semaphore] = None
+_stt_semaphore_lock = threading.Lock()
+
+
+def _get_stt_semaphore() -> asyncio.Semaphore:
+    global _stt_semaphore
+    if _stt_semaphore is None:
+        with _stt_semaphore_lock:
+            if _stt_semaphore is None:
+                _stt_semaphore = asyncio.Semaphore(settings.GROQ_STT_MAX_CONCURRENT)
+    return _stt_semaphore
 
 
 async def transcribe_audio(
@@ -85,7 +105,7 @@ async def transcribe_audio(
         last_error: Optional[Exception] = None
         for attempt in range(1, 3):
             try:
-                async with httpx.AsyncClient(timeout=timeout_s) as client:
+                async with _get_stt_semaphore(), httpx.AsyncClient(timeout=timeout_s) as client:
                     response = await client.post(url, headers=headers, files=files, data=data)
 
                 if response.status_code == 200:

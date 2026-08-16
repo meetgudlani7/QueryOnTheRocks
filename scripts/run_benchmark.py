@@ -8,6 +8,14 @@ numbers only — no placeholders, no estimates.
 
 import asyncio
 import logging
+import sys
+from pathlib import Path
+
+# Running this file directly (`python scripts/run_benchmark.py`) puts this
+# file's own directory on sys.path, not the project root — without this,
+# `from config import ...` below fails with ModuleNotFoundError. Mirrors
+# scripts/build_index.py's identical bootstrap.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from config import configure_logging
 from evaluation.benchmark import run_benchmark, run_voice_latency_benchmark

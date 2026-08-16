@@ -14,7 +14,7 @@ class Evidence(BaseModel):
     """Represents a piece of evidence from retrieval."""
     passage: str
     score: float
-    source: str  # "qdrant", "bm25", or "fused"
+    source: str  # "qdrant", "bm25", "fused", or "reranked"
     document_id: str
     language: str
     metadata: dict = Field(default_factory=dict)

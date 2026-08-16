@@ -6,10 +6,11 @@ Handles audio file upload and speech-to-text processing.
 
 from typing import Optional
 
-from fastapi import APIRouter, UploadFile, File, Form, HTTPException
+from fastapi import APIRouter, Depends, UploadFile, File, Form, HTTPException
 from fastapi.responses import JSONResponse
 import logging
 
+from apps.api.dependencies import require_api_key
 from pipeline.orchestrator import process_audio
 from pipeline.schemas import AudioRequest, AudioResponse
 
@@ -17,7 +18,7 @@ router = APIRouter(prefix="/api/audio", tags=["audio"])
 logger = logging.getLogger(__name__)
 
 
-@router.post("")
+@router.post("", dependencies=[Depends(require_api_key)])
 async def process_audio_file(file: UploadFile = File(...), language: Optional[str] = Form(None)):
     """
     Process uploaded audio file.
