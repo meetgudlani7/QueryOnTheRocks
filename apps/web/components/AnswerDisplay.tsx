@@ -11,16 +11,89 @@ export interface AnswerDisplayProps {
   language: string
   latency: number
   sttLatency?: number
-  // Streaming-only (roadmap Phase 21): true while answer text has arrived
-  // but the post-hoc groundedness check hasn't finished yet — confidence/
-  // grounded below aren't final until this clears. Undefined/false for
-  // the non-streaming path, which has no provisional state at all.
   verifying?: boolean
-  // Set when a streamed answer finished but failed post-hoc validation —
-  // the text was already shown to the user (can't be un-shown), so this
-  // flags it rather than hiding it.
   unverifiedReason?: string
 }
+
+// ── Small primitives ────────────────────────────────────────────────────
+
+function GroundedBadge({ grounded, verifying }: { grounded: boolean; verifying?: boolean }) {
+  if (verifying) {
+    return (
+      <span className="badge badge-verifying" aria-live="polite">
+        <span style={{
+          width: '6px', height: '6px', borderRadius: '50%',
+          background: 'var(--ocean)', display: 'inline-block',
+          animation: 'mic-pulse 1.2s ease-in-out infinite',
+        }} />
+        Verifying…
+      </span>
+    )
+  }
+  if (grounded) {
+    return (
+      <span className="badge badge-grounded" aria-label="Answer is grounded">
+        ✓ Grounded
+      </span>
+    )
+  }
+  return (
+    <span className="badge badge-ungrounded" aria-label="Answer is not grounded">
+      ! Not grounded
+    </span>
+  )
+}
+
+function LatencyChip({ ms, label }: { ms: number; label: string }) {
+  const target = 200
+  const isFast = ms > 0 && ms <= target
+  const isSlow = ms > target
+
+  return (
+    <div className="metric-chip">
+      <span className="label">{label}</span>
+      <span
+        className={`metric-value ${isFast ? 'fast' : isSlow ? 'slow' : ''}`}
+        aria-label={`${label}: ${ms.toFixed(1)} milliseconds`}
+      >
+        ⚡ {ms.toFixed(1)} ms
+      </span>
+      {label === 'RAG Latency' && ms > 0 && (
+        <span style={{
+          fontSize: '0.62rem',
+          color: isFast ? 'var(--olive)' : 'var(--burnt)',
+          fontWeight: 600,
+        }}>
+          {isFast ? `${(target - ms).toFixed(0)} ms under target` : `target < ${target} ms`}
+        </span>
+      )}
+    </div>
+  )
+}
+
+function ConfidenceChip({ confidence }: { confidence: number }) {
+  const pct = (confidence * 100).toFixed(1)
+  return (
+    <div className="metric-chip">
+      <span className="label">Confidence</span>
+      <span className="metric-value" style={{ color: 'var(--ocean)' }}>
+        {pct}%
+      </span>
+    </div>
+  )
+}
+
+function Divider() {
+  return (
+    <div style={{
+      height: '1px',
+      background: 'var(--border-warm)',
+      margin: '0.85rem 0',
+    }} />
+  )
+}
+
+// ── Main component ──────────────────────────────────────────────────────
 
 export default function AnswerDisplay({
   query,
@@ -34,127 +107,225 @@ export default function AnswerDisplay({
   verifying = false,
   unverifiedReason,
 }: AnswerDisplayProps) {
-  const [expanded, setExpanded] = useState(false)
+  const [evidenceOpen, setEvidenceOpen] = useState(false)
 
-  const formatLatency = (ms: number) => {
-    if (ms < 1000) {
-      return `${ms.toFixed(1)}ms`
-    }
-    return `${(ms / 1000).toFixed(2)}s`
-  }
-
-  const formatConfidence = (conf: number) => {
-    return `${(conf * 100).toFixed(1)}%`
-  }
+  const showMetrics = latency > 0 || confidence > 0 || sttLatency !== undefined
 
   return (
-    <section className="bg-gradient-to-br from-blue-50 to-indigo-50 rounded-2xl shadow-lg p-8">
-      <h2 className="text-2xl font-semibold text-gray-800 mb-6">
-        Answer
-      </h2>
+    <section className="card-solid fade-in" aria-label="Query result">
 
-      {/* Query */}
+      {/* ── TRANSCRIPT ───────────────────────────────────────────── */}
       {query && (
-        <div className="mb-6 p-4 bg-white rounded-lg shadow-sm">
-          <p className="text-gray-700">
-            <span className="font-medium">Question:</span> {query}
-          </p>
-        </div>
-      )}
-
-      {/* Answer */}
-      <div className="answer-card mb-6">
-        <p className="text-xl text-gray-800 leading-relaxed">
-          {answer || 'No answer available'}
-          {verifying && <span className="inline-block w-2 h-5 ml-1 bg-blue-400 animate-pulse align-text-bottom" aria-hidden="true" />}
-        </p>
-      </div>
-
-      {/* Streaming-only provisional/verification status (roadmap Phase 21) —
-          the answer text above may already be fully shown while this is
-          still resolving, since post-hoc validation can only run after
-          generation finishes. */}
-      {verifying && (
-        <div className="mb-6 flex items-center gap-2 text-sm text-blue-600">
-          <span className="w-2 h-2 rounded-full bg-blue-500 animate-pulse" aria-hidden="true" />
-          Verifying answer against sources…
-        </div>
-      )}
-      {!verifying && unverifiedReason && (
-        <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 mb-6">
-          <p className="text-yellow-800 font-medium">Not fully verified</p>
-          <p className="text-yellow-700 text-sm mt-1">
-            This answer could not be confirmed as fully grounded in the retrieved sources: {unverifiedReason}
-          </p>
-        </div>
-      )}
-
-      {/* Metrics — mirrors the guide's "show the engineering" panel */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 mb-6">
-        <div className="bg-white rounded-lg p-4 shadow-sm">
-          <p className="text-sm text-gray-500 uppercase tracking-wider mb-1">Language</p>
-          <p className="text-lg font-semibold text-gray-800">{language || 'unknown'}</p>
-        </div>
-        <div className="bg-white rounded-lg p-4 shadow-sm">
-          <p className="text-sm text-gray-500 uppercase tracking-wider mb-1">Retrieval</p>
-          <p className="text-lg font-semibold text-gray-800">Hybrid</p>
-        </div>
-        <div className="bg-white rounded-lg p-4 shadow-sm">
-          <p className="text-sm text-gray-500 uppercase tracking-wider mb-1">Grounded</p>
-          <p className={`text-lg font-semibold ${grounded ? 'text-green-600' : 'text-red-600'}`}>
-            {grounded ? 'Yes' : 'No'}
-          </p>
-        </div>
-        <div className="bg-white rounded-lg p-4 shadow-sm">
-          <p className="text-sm text-gray-500 uppercase tracking-wider mb-1">Confidence</p>
-          <p className="text-2xl font-semibold text-blue-600">{formatConfidence(confidence)}</p>
-        </div>
-        <div className="bg-white rounded-lg p-4 shadow-sm">
-          <p className="text-sm text-gray-500 uppercase tracking-wider mb-1">RAG Latency</p>
-          <p className="text-2xl font-semibold text-green-600">{formatLatency(latency)}</p>
-        </div>
-        {sttLatency !== undefined && (
-          <div className="bg-white rounded-lg p-4 shadow-sm">
-            <p className="text-sm text-gray-500 uppercase tracking-wider mb-1">STT Latency</p>
-            <p className="text-2xl font-semibold text-green-600">{formatLatency(sttLatency)}</p>
+        <>
+          <div>
+            <p className="label" style={{ marginBottom: '0.3rem' }}>You asked</p>
+            <p style={{
+              fontSize: '0.9rem',
+              color: 'var(--charcoal)',
+              fontStyle: 'italic',
+              lineHeight: 1.5,
+              margin: 0,
+            }}>
+              "{query}"
+            </p>
           </div>
-        )}
+          <Divider />
+        </>
+      )}
+
+      {/* ── ANSWER ───────────────────────────────────────────────── */}
+      <div>
+        <p className="label" style={{ marginBottom: '0.5rem' }}>Answer</p>
+        <div className="answer-card">
+          <p className="answer-text" style={{ margin: 0 }}>
+            {answer || 'No answer available.'}
+            {verifying && (
+              <span
+                className="blink"
+                style={{
+                  display: 'inline-block',
+                  width: '2px',
+                  height: '1.1em',
+                  background: 'var(--ocean)',
+                  marginLeft: '3px',
+                  verticalAlign: 'text-bottom',
+                }}
+                aria-hidden="true"
+              />
+            )}
+          </p>
+        </div>
       </div>
 
-      {/* Evidence */}
-      {evidence.length > 0 && (
-        <div className="bg-white rounded-lg p-4 shadow-sm">
-          <button
-            onClick={() => setExpanded(!expanded)}
-            className="flex items-center justify-between w-full text-left"
-          >
-            <h3 className="text-lg font-semibold text-gray-800">
-              Evidence ({evidence.length})
-            </h3>
-            <svg
-              className={`w-5 h-5 text-gray-500 transition-transform ${expanded ? 'rotate-180' : ''}`}
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-            >
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-            </svg>
-          </button>
-
-          {expanded && (
-            <div className="mt-4 space-y-4">
-              {evidence.map((item, index) => (
-                <div
-                  key={index}
-                  className="p-4 bg-gray-50 rounded-lg border border-gray-200"
-                >
-                  <p className="text-gray-700 text-sm">{item}</p>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
+      {/* ── UNVERIFIED WARNING ───────────────────────────────────── */}
+      {!verifying && unverifiedReason && (
+        <>
+          <Divider />
+          <div style={{
+            background: 'rgba(191,100,21,0.08)',
+            border: '1px solid rgba(191,100,21,0.25)',
+            borderRadius: '8px',
+            padding: '0.65rem 0.9rem',
+          }}>
+            <p style={{
+              fontSize: '0.78rem',
+              fontWeight: 700,
+              color: 'var(--burnt)',
+              margin: '0 0 0.2rem',
+            }}>
+              Not fully verified
+            </p>
+            <p style={{
+              fontSize: '0.78rem',
+              color: 'var(--charcoal)',
+              margin: 0,
+              lineHeight: 1.5,
+            }}>
+              {unverifiedReason}
+            </p>
+          </div>
+        </>
       )}
+
+      <Divider />
+
+      {/* ── STATUS ROW ───────────────────────────────────────────── */}
+      <div style={{
+        display: 'flex',
+        alignItems: 'center',
+        flexWrap: 'wrap',
+        gap: '0.6rem',
+      }}>
+        <GroundedBadge grounded={grounded} verifying={verifying} />
+
+        {language && (
+          <span className="badge" style={{
+            background: 'rgba(75,158,191,0.1)',
+            color: 'var(--ocean)',
+            border: '1px solid rgba(75,158,191,0.25)',
+          }}>
+            {language.toUpperCase()}
+          </span>
+        )}
+
+        <span className="badge" style={{
+          background: 'rgba(82,100,59,0.08)',
+          color: 'var(--olive)',
+          border: '1px solid rgba(82,100,59,0.2)',
+        }}>
+          Hybrid retrieval
+        </span>
+      </div>
+
+      {/* ── METRICS ──────────────────────────────────────────────── */}
+      {showMetrics && (
+        <>
+          <Divider />
+          <div style={{
+            display: 'flex',
+            gap: '1.5rem',
+            flexWrap: 'wrap',
+          }}>
+            {latency > 0 && (
+              <LatencyChip ms={latency} label="RAG Latency" />
+            )}
+            {sttLatency !== undefined && sttLatency > 0 && (
+              <LatencyChip ms={sttLatency} label="STT Latency" />
+            )}
+            {confidence > 0 && (
+              <ConfidenceChip confidence={confidence} />
+            )}
+          </div>
+        </>
+      )}
+
+      {/* ── EVIDENCE ─────────────────────────────────────────────── */}
+      {evidence.length > 0 && (
+        <>
+          <Divider />
+          <div>
+            <button
+              onClick={() => setEvidenceOpen((o) => !o)}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '0.4rem',
+                background: 'none',
+                border: 'none',
+                cursor: 'pointer',
+                padding: 0,
+                width: '100%',
+                textAlign: 'left',
+              }}
+              aria-expanded={evidenceOpen}
+              aria-controls="evidence-list"
+            >
+              <span className="label" style={{ color: 'var(--ocean)' }}>
+                Retrieved evidence
+              </span>
+              <span style={{
+                fontSize: '0.65rem',
+                fontWeight: 700,
+                color: 'rgba(75,158,191,0.7)',
+                background: 'rgba(75,158,191,0.1)',
+                borderRadius: '20px',
+                padding: '0.1rem 0.45rem',
+              }}>
+                {evidence.length}
+              </span>
+              <svg
+                width="12"
+                height="12"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="var(--ocean)"
+                strokeWidth="2.5"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                style={{
+                  marginLeft: 'auto',
+                  transform: evidenceOpen ? 'rotate(180deg)' : 'rotate(0deg)',
+                  transition: 'transform 0.2s',
+                }}
+                aria-hidden="true"
+              >
+                <polyline points="6 9 12 15 18 9" />
+              </svg>
+            </button>
+
+            {evidenceOpen && (
+              <div
+                id="evidence-list"
+                className="fade-in"
+                style={{
+                  marginTop: '0.75rem',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '0.5rem',
+                }}
+              >
+                {evidence.map((item, index) => (
+                  <div key={index} className="evidence-item">
+                    <span style={{
+                      fontSize: '0.6rem',
+                      fontWeight: 700,
+                      letterSpacing: '0.08em',
+                      textTransform: 'uppercase',
+                      color: 'var(--burnt)',
+                      display: 'block',
+                      marginBottom: '0.2rem',
+                    }}>
+                      Source {index + 1}
+                    </span>
+                    {item}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </>
+      )}
+
     </section>
   )
 }

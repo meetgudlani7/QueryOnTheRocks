@@ -5,8 +5,8 @@ import './globals.css'
 const inter = Inter({ subsets: ['latin'] })
 
 export const metadata: Metadata = {
-  title: 'Voice-Enabled RAG System',
-  description: 'Ask questions via voice and get grounded answers from our knowledge base',
+  title: 'QueryOnTheRocks',
+  description: 'Voice-powered RAG from Goa — Hacker House 2026',
 }
 
 export default function RootLayout({
