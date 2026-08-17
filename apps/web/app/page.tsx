@@ -4,7 +4,15 @@ import { useState } from 'react'
 import AudioRecorder from '../components/AudioRecorder'
 import AnswerDisplay from '../components/AnswerDisplay'
 import LoadingSpinner from '../components/LoadingSpinner'
+import PipelineIndicator, { buildStages, PipelineMode } from '../components/PipelineIndicator'
 import { queryAPIStream, uploadAudio, StreamEvent } from '../lib/api'
+
+const EXAMPLES = [
+  'Who invented the telephone?',
+  'What causes the northern lights?',
+  'How does a vaccine work?',
+  'What is the speed of light?',
+]
 
 export default function Home() {
   const [query, setQuery] = useState('')
@@ -19,16 +27,33 @@ export default function Home() {
   const [verifying, setVerifying] = useState(false)
   const [unverifiedReason, setUnverifiedReason] = useState('')
   const [error, setError] = useState('')
+  const [isVoice, setIsVoice] = useState(false)
+  const [hasQueried, setHasQueried] = useState(false)
 
-  // Text queries stream (roadmap Phase 21): answer text renders as it
-  // arrives instead of waiting for the full retrieve-generate-validate
-  // pipeline to finish. Voice queries (handleAudioSubmitted, below) still
-  // use the non-streaming /api/audio path — STT has to complete before
-  // RAG can even start, so the perceived-latency win streaming buys on
-  // text is much smaller there, and it's out of this phase's scope.
-  const handleTextQuery = async () => {
-    if (!query.trim()) return
+  const pipelineMode: PipelineMode = (() => {
+    if (error) return 'error'
+    if (verifying) return 'verifying'
+    if (isLoading) return 'loading'
+    if (answer || evidence.length > 0) return 'complete'
+    return 'idle'
+  })()
 
+  const loadingMode = (() => {
+    if (!isLoading) return 'generic'
+    if (isVoice && !answer) return 'stt'
+    return 'retrieve'
+  })() as 'stt' | 'retrieve' | 'generate' | 'verify' | 'generic'
+
+  const showPipeline = pipelineMode !== 'idle'
+  const hasResult = answer || evidence.length > 0
+  const showEmpty = !hasQueried && !isLoading && !error
+
+  const handleTextQuery = async (overrideQuery?: string) => {
+    const q = overrideQuery ?? query
+    if (!q.trim()) return
+
+    setIsVoice(false)
+    setHasQueried(true)
     setIsLoading(true)
     setError('')
     setSttLatency(undefined)
@@ -46,11 +71,14 @@ export default function Home() {
         case 'token':
           streamedAnswer += event.text || ''
           setAnswer(streamedAnswer)
-          setIsLoading(false) // first token arrived — the answer card itself now shows progress
+          setIsLoading(false)
           setVerifying(true)
           break
         case 'refused':
-          setAnswer(event.reason || "I couldn't find enough information in the knowledge base to answer that.")
+          setAnswer(
+            event.reason ||
+            "I couldn't find enough information in the knowledge base to answer that."
+          )
           setEvidence(event.evidence || [])
           setConfidence(event.confidence || 0)
           setVerifying(false)
@@ -58,7 +86,9 @@ export default function Home() {
           break
         case 'unverified':
           setEvidence(event.evidence || [])
-          setUnverifiedReason(event.reason || 'This answer could not be confirmed as grounded.')
+          setUnverifiedReason(
+            event.reason || 'This answer could not be confirmed as grounded.'
+          )
           setVerifying(false)
           setIsLoading(false)
           break
@@ -80,7 +110,7 @@ export default function Home() {
     }
 
     try {
-      await queryAPIStream({ query, language: 'en' }, onEvent)
+      await queryAPIStream({ query: q, language: 'en' }, onEvent)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unknown error')
       setIsLoading(false)
@@ -89,11 +119,17 @@ export default function Home() {
   }
 
   const handleAudioSubmitted = async (audioBlob: Blob) => {
+    setIsVoice(true)
+    setHasQueried(true)
     setIsLoading(true)
     setError('')
     setQuery('')
     setAnswer('')
     setEvidence([])
+    setConfidence(0)
+    setGrounded(false)
+    setUnverifiedReason('')
+    setVerifying(false)
 
     try {
       const data = await uploadAudio(audioBlob)
@@ -112,70 +148,212 @@ export default function Home() {
     }
   }
 
+  const handleExample = (q: string) => {
+    setQuery(q)
+    handleTextQuery(q)
+  }
+
   return (
-    <main className="min-h-screen bg-gradient-to-b from-blue-50 to-white p-8">
-      <div className="container">
-        {/* Header */}
-        <header className="text-center mb-12">
-          <h1 className="text-4xl font-bold text-gray-900 mb-4">
-            Voice-Enabled RAG System
-          </h1>
-          <p className="text-lg text-gray-600 max-w-2xl mx-auto">
-            Ask questions via voice or text and get grounded answers from our knowledge base
+    <div className="page-shell">
+      <div className="content-col">
+
+        {/* ── HEADER ─────────────────────────────────────────────── */}
+        <header style={{ textAlign: 'center', padding: '1.25rem 0 0.25rem' }}>
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: '0.5rem',
+            marginBottom: '0.3rem',
+          }}>
+            <span style={{ fontSize: '1.5rem' }}>🪨</span>
+            <h1 style={{
+              fontSize: '1.75rem',
+              fontWeight: 800,
+              letterSpacing: '-0.03em',
+              color: '#fff',
+              textShadow: '0 2px 12px rgba(0,0,0,0.5), 0 1px 3px rgba(0,0,0,0.4)',
+              margin: 0,
+            }}>
+              QueryOnTheRocks
+            </h1>
+          </div>
+          <p style={{
+            fontSize: '0.72rem',
+            fontWeight: 600,
+            letterSpacing: '0.18em',
+            textTransform: 'uppercase',
+            color: 'rgba(253,248,238,0.65)',
+            textShadow: '0 1px 4px rgba(0,0,0,0.5)',
+            margin: '0 0 0.5rem',
+          }}>
+            Voice-powered RAG · Goa 2026
           </p>
+          <span style={{
+            display: 'inline-block',
+            fontSize: '0.58rem',
+            fontWeight: 700,
+            letterSpacing: '0.16em',
+            textTransform: 'uppercase',
+            color: 'var(--mustard)',
+            background: 'rgba(0,0,0,0.45)',
+            border: '1px solid rgba(243,186,32,0.3)',
+            padding: '0.22rem 0.65rem',
+            borderRadius: '20px',
+            backdropFilter: 'blur(8px)',
+          }}>
+            HH GOA 2026
+          </span>
         </header>
 
-        {/* Main Content */}
-        <div className="max-w-4xl mx-auto">
-          {/* Recorder Section */}
-          <section className="bg-white rounded-2xl shadow-lg p-8 mb-8">
-            <h2 className="text-2xl font-semibold text-gray-800 mb-6">
-              Voice Input
-            </h2>
-            <AudioRecorder onAudioSubmitted={handleAudioSubmitted} />
-          </section>
+        {/* ── QUERY COMPOSER ─────────────────────────────────────── */}
+        <section className="card">
+          <p className="card-eyebrow">Ask the rocks anything</p>
 
-          {/* Text Input Section */}
-          <section className="bg-white rounded-2xl shadow-lg p-8 mb-8">
-            <h2 className="text-2xl font-semibold text-gray-800 mb-6">
-              Text Input
-            </h2>
-            <div className="flex gap-4">
-              <input
-                type="text"
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                placeholder="Ask a question..."
-                className="flex-1 px-4 py-3 border border-gray-300 rounded-lg bg-white text-gray-900 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                disabled={isLoading}
-                onKeyPress={(e) => e.key === 'Enter' && handleTextQuery()}
-              />
-              <button
-                onClick={handleTextQuery}
-                disabled={isLoading || !query.trim()}
-                className="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:bg-blue-400 disabled:cursor-not-allowed transition-colors"
-              >
-                Ask
-              </button>
+          {/* Mic zone */}
+          <div className="mic-zone">
+            <span className="mic-zone-label">🎙 Voice</span>
+            <AudioRecorder
+              onAudioSubmitted={handleAudioSubmitted}
+              disabled={isLoading}
+            />
+          </div>
+
+          {/* OR TYPE divider */}
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '0.75rem',
+            marginBottom: '0.85rem',
+          }}>
+            <div style={{ flex: 1, height: '1px', background: 'rgba(255,255,255,0.1)' }} />
+            <span style={{
+              fontSize: '0.58rem',
+              fontWeight: 600,
+              letterSpacing: '0.12em',
+              textTransform: 'uppercase',
+              color: 'rgba(253,248,238,0.3)',
+            }}>
+              or type
+            </span>
+            <div style={{ flex: 1, height: '1px', background: 'rgba(255,255,255,0.1)' }} />
+          </div>
+
+          {/* Text input row */}
+          <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+            <input
+              type="text"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && handleTextQuery()}
+              placeholder="Type your question…"
+              className="query-input"
+              disabled={isLoading}
+              aria-label="Type your question"
+            />
+            <button
+              onClick={() => handleTextQuery()}
+              disabled={isLoading || !query.trim()}
+              className="btn btn-ocean"
+              aria-label="Submit question"
+            >
+              Ask
+            </button>
+          </div>
+        </section>
+
+        {/* ── EMPTY STATE ─────────────────────────────────────────── */}
+        {showEmpty && (
+          <div className="card fade-in" style={{ textAlign: 'center', padding: '1rem 1.25rem' }}>
+            <p style={{
+              fontSize: '0.58rem',
+              fontWeight: 700,
+              letterSpacing: '0.15em',
+              textTransform: 'uppercase',
+              color: 'rgba(253,248,238,0.4)',
+              margin: '0 0 0.65rem',
+            }}>
+              Try asking
+            </p>
+            <div style={{
+              display: 'flex',
+              flexWrap: 'wrap',
+              gap: '0.45rem',
+              justifyContent: 'center',
+            }}>
+              {EXAMPLES.map((q) => (
+                <button
+                  key={q}
+                  onClick={() => handleExample(q)}
+                  className="example-chip"
+                  aria-label={`Ask: ${q}`}
+                >
+                  {q}
+                </button>
+              ))}
             </div>
-          </section>
+          </div>
+        )}
 
-          {/* Loading State */}
-          {isLoading && (
-            <div className="flex justify-center py-8">
-              <LoadingSpinner />
-            </div>
-          )}
+        {/* ── PIPELINE INDICATOR ──────────────────────────────────── */}
+        {showPipeline && (
+          <div className="card fade-in" style={{ padding: '0.85rem 1.25rem' }}>
+            <p style={{
+              fontSize: '0.56rem',
+              fontWeight: 700,
+              letterSpacing: '0.14em',
+              textTransform: 'uppercase',
+              color: 'rgba(243,186,32,0.6)',
+              margin: '0 0 0.65rem',
+            }}>
+              Pipeline
+            </p>
+            <PipelineIndicator stages={buildStages(pipelineMode, isVoice)} />
+          </div>
+        )}
 
-          {/* Error State */}
-          {error && (
-            <div className="bg-red-50 border border-red-200 rounded-lg p-4 mb-8">
-              <p className="text-red-600">{error}</p>
-            </div>
-          )}
+        {/* ── LOADING ─────────────────────────────────────────────── */}
+        {isLoading && (
+          <div className="card fade-in" style={{ textAlign: 'center', padding: '1.5rem' }}>
+            <LoadingSpinner mode={loadingMode} />
+          </div>
+        )}
 
-          {/* Answer Display */}
-          {(answer || evidence.length > 0) && !isLoading && (
+        {/* ── ERROR ───────────────────────────────────────────────── */}
+        {error && (
+          <div
+            className="card fade-in"
+            style={{
+              borderLeft: '3px solid #d94f4f',
+              borderRadius: '0 14px 14px 0',
+            }}
+          >
+            <p style={{
+              fontSize: '0.62rem',
+              fontWeight: 700,
+              letterSpacing: '0.12em',
+              textTransform: 'uppercase',
+              color: '#e07070',
+              marginBottom: '0.3rem',
+            }}>
+              Error
+            </p>
+            <p style={{ fontSize: '0.9rem', color: 'rgba(253,248,238,0.85)', margin: '0 0 0.6rem' }}>
+              {error}
+            </p>
+            <button
+              className="btn btn-ghost"
+              style={{ fontSize: '0.78rem' }}
+              onClick={() => { setError(''); setHasQueried(false) }}
+            >
+              Try again
+            </button>
+          </div>
+        )}
+
+        {/* ── ANSWER ──────────────────────────────────────────────── */}
+        {hasResult && !isLoading && (
+          <div className="fade-in">
             <AnswerDisplay
               query={query}
               answer={answer}
@@ -188,14 +366,24 @@ export default function Home() {
               verifying={verifying}
               unverifiedReason={unverifiedReason}
             />
-          )}
-        </div>
+          </div>
+        )}
 
-        {/* Footer */}
-        <footer className="text-center text-gray-500 text-sm mt-12">
-          <p>HH Goa 2026 - Task 2: Voice-Enabled RAG System</p>
+        {/* ── FOOTER ──────────────────────────────────────────────── */}
+        <footer style={{
+          textAlign: 'center',
+          padding: '0.5rem 0 0',
+          fontSize: '0.62rem',
+          fontWeight: 600,
+          letterSpacing: '0.12em',
+          textTransform: 'uppercase',
+          color: 'rgba(253,248,238,0.35)',
+          textShadow: '0 1px 3px rgba(0,0,0,0.4)',
+        }}>
+          Hacker House Goa 2026 · Task 2 · RAG
         </footer>
+
       </div>
-    </main>
+    </div>
   )
 }
