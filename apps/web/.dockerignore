@@ -1,0 +1,7 @@
+# Without this, `COPY . .` in the Dockerfile's builder stage would overwrite
+# the container's freshly-installed node_modules with whatever's on the
+# host (wrong platform, possibly stale) — see apps/web/Dockerfile.
+node_modules/
+.next/
+.git/
+npm-debug.log*

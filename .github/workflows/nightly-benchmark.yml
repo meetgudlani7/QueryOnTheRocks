@@ -1,0 +1,70 @@
+name: Nightly Benchmark
+
+# Roadmap Phase 24 continuous evaluation. A full 157-query run at the
+# Groq-rate-limit-safe 15s/query pacing (scripts/track_benchmark.py, same
+# basis as scripts/run_benchmark.py's REQUEST_DELAY_S) takes on the order
+# of 40 minutes — impractical to run on every push, appropriate for a
+# nightly schedule. Needs GROQ_API_KEY, QDRANT_URL, QDRANT_API_KEY,
+# QDRANT_COLLECTION as repository secrets (Settings > Secrets and
+# variables > Actions) and a pre-built index at that Qdrant collection —
+# this workflow does not build one, see scripts/build_index.py for that
+# (a multi-hour job, deliberately not run from CI).
+#
+# Commits the updated evaluation/benchmark_history.jsonl back to the
+# default branch so the quality trend is visible in git history/PRs, not
+# just in transient workflow logs.
+
+on:
+  schedule:
+    - cron: "0 3 * * *" # 03:00 UTC daily
+  workflow_dispatch:
+    inputs:
+      max_queries:
+        description: "Max queries to run (default: full 157-query set)"
+        required: false
+        default: "157"
+
+jobs:
+  benchmark:
+    name: Run benchmark and track history
+    runs-on: ubuntu-latest
+    env:
+      GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+      QDRANT_URL: ${{ secrets.QDRANT_URL }}
+      QDRANT_API_KEY: ${{ secrets.QDRANT_API_KEY }}
+      QDRANT_COLLECTION: ${{ secrets.QDRANT_COLLECTION }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Check required secrets are configured
+        run: |
+          missing=""
+          [ -z "$GROQ_API_KEY" ] && missing="$missing GROQ_API_KEY"
+          [ -z "$QDRANT_URL" ] && missing="$missing QDRANT_URL"
+          if [ -n "$missing" ]; then
+            echo "::error::Missing required secret(s):$missing — configure under Settings > Secrets and variables > Actions."
+            exit 1
+          fi
+
+      - name: Run benchmark (~40 min for the full query set)
+        run: |
+          python scripts/track_benchmark.py \
+            --max-queries "${{ github.event.inputs.max_queries || 157 }}" \
+            --fail-on-regression
+
+      - name: Commit updated benchmark history
+        if: always()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add evaluation/benchmark_history.jsonl
+          git diff --cached --quiet || git commit -m "chore: nightly benchmark run [skip ci]"
+          git push

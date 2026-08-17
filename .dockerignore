@@ -1,0 +1,13 @@
+# Keeps the build context sent to the Docker daemon small — the API image
+# only needs config/, retrieval/, pipeline/, apps/api/ (see apps/api/Dockerfile).
+.venv/
+data/
+apps/web/node_modules/
+apps/web/.next/
+__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+.git/
+.env
+*.log

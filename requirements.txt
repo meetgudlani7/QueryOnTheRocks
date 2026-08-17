@@ -1,50 +1,69 @@
 # ==========================================
 # Voice-Enabled RAG System - Python Dependencies
 # ==========================================
+# Minimum versions rather than exact pins: the original exact pins (e.g.
+# pydantic==2.6.0) predate Python 3.13 and fail to build (pydantic-core
+# tries to compile from source and hits a typing.ForwardRef incompatibility
+# with 3.13). Minimum versions let pip resolve to whatever current release
+# has a prebuilt wheel for the Python actually running.
 
 # Core Framework
-fastapi==0.110.0
-uvicorn==0.27.0
-pydantic==2.6.0
-pydantic-settings==2.2.0
+fastapi>=0.110.0
+uvicorn>=0.27.0
+pydantic>=2.7.0
+pydantic-settings>=2.2.0
 
 # HTTP Client
-httpx==0.26.0
+httpx>=0.26.0
+
+# Required by FastAPI's UploadFile/File() used in apps/api/routes/audio.py
+python-multipart>=0.0.9
 
 # Async Support
-anyio==4.2.0
+anyio>=4.2.0
 
 # Data Processing
-numpy==1.26.4
+numpy>=1.26.4
 
 # Testing
-pytest==8.0.0
-pytest-asyncio==0.23.3
-pytest-cov==4.1.0
+pytest>=8.0.0
+pytest-asyncio>=0.23.3
+pytest-cov>=4.1.0
 
 # Type Hints
-typing-extensions==4.11.0
+typing-extensions>=4.11.0
 
 # Logging
-structlog==24.1.0
+structlog>=24.1.0
 
 # For production
-# gunicorn==21.2.0
-# pydantic[email]==2.6.0
+# gunicorn>=21.2.0
 
-# Optional: For actual dataset download
-# datasets==2.18.0
-# huggingface_hub==0.20.3
+# Dataset ingestion (ingestion/download.py downloads parquet shards via
+# httpx and reads them with DuckDB, deliberately NOT the `datasets` library
+# or pyarrow's table reader — both crash on this specific dataset's nested
+# schema, see download.py's module docstring)
+duckdb>=1.0.0
+pandas>=2.0.0
 
-# Optional: For actual Qdrant
-# qdrant-client==1.8.0
+# Embeddings (retrieval/embeddings.py — shared by ingestion and query time)
+sentence-transformers>=5.0.0
+torch>=2.2.0
 
-# Optional: For actual embeddings
-# sentence-transformers==2.2.2
-# torch==2.2.0
+# Note: no qdrant-client — retrieval/qdrant_store.py talks to Qdrant over
+# plain REST via httpx, which already works identically against Qdrant
+# Cloud or a self-hosted instance.
+
+# Optional per-stage tracing (config/tracing.py, roadmap Phase 24) — only
+# needed if TRACING_ENABLED=true. config/tracing.py fails open (tracing
+# just stays disabled with a warning) if these aren't installed, so they
+# stay commented-optional rather than a hard dependency.
+# opentelemetry-api>=1.24.0
+# opentelemetry-sdk>=1.24.0
+# opentelemetry-exporter-otlp-proto-http>=1.24.0
 
 # Development
-black==24.2.0
-isort==5.13.2
-flake8==6.1.0
-mypy==1.9.0
+black>=24.2.0
+isort>=5.13.2
+flake8>=6.1.0
+mypy>=1.9.0
