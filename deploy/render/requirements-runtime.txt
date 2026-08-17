@@ -1,0 +1,40 @@
+# Runtime dependencies for the API process only (apps/api/main.py and
+# everything it imports at request-serving time). Deliberately excludes
+# torch, sentence-transformers, transformers, duckdb, pandas — those are
+# offline/ingestion-only (see ingestion/, scripts/export_onnx_embedder.py)
+# and pulling them in here would be ~800MB of dead weight in this image.
+#
+# Requires EMBEDDING_BACKEND=onnx (config/settings.py) — the default
+# "torch" backend needs sentence-transformers/torch, which aren't
+# installed by this file. See retrieval/onnx_embedder.py +
+# scripts/verify_onnx_embedder.py for why the onnx backend is safe to run
+# in production (numerically verified identical to the torch model).
+
+# Core Framework
+fastapi>=0.110.0
+uvicorn>=0.27.0
+pydantic>=2.7.0
+pydantic-settings>=2.2.0
+
+# HTTP Client
+httpx>=0.26.0
+
+# Required by FastAPI's UploadFile/File() used in apps/api/routes/audio.py
+python-multipart>=0.0.9
+
+# Async Support
+anyio>=4.2.0
+
+# Data Processing — used by the BM25 in-memory index and general array ops
+numpy>=1.26.4
+
+# Logging
+structlog>=24.1.0
+
+# Type Hints
+typing-extensions>=4.11.0
+
+# Lightweight query-time embedding (retrieval/onnx_embedder.py) — no torch,
+# no transformers. onnxruntime here is the CPU package only.
+onnxruntime>=1.18.0
+tokenizers>=0.20.0

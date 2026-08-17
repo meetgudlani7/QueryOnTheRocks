@@ -89,31 +89,15 @@ def _load_model():
 
 def get_embedding_dimension() -> int:
     """The real output dimension of the configured model (may differ from settings.EMBEDDING_DIMENSION)."""
-    if settings.EMBEDDING_BACKEND == "onnx":
-        from retrieval import onnx_embedder
-        return onnx_embedder.get_dimension(settings.EMBEDDING_ONNX_DIR, settings.EMBEDDING_MAX_SEQ_LENGTH)
     return _load_model().get_embedding_dimension()
 
 
 def _encode_sync(texts: List[str], batch_size: int) -> List[List[float]]:
+    model = _load_model()
     # A true empty string embeds fine for most models but some sentence-transformers
     # backends warn/behave oddly on it; a single space is a harmless stand-in that
     # keeps the output list aligned 1:1 with the input list.
     cleaned = [t if isinstance(t, str) and t.strip() else " " for t in texts]
-
-    if settings.EMBEDDING_BACKEND == "onnx":
-        # Verified numerically equivalent to the torch path (cosine_sim=1.0,
-        # max_abs_diff=0.0 across English/Hindi/empty/long-truncated cases —
-        # see scripts/verify_onnx_embedder.py) — same weights, lighter runtime.
-        from retrieval import onnx_embedder
-        try:
-            return onnx_embedder.encode(
-                cleaned, model_dir=settings.EMBEDDING_ONNX_DIR, max_seq_length=settings.EMBEDDING_MAX_SEQ_LENGTH
-            )
-        except onnx_embedder.OnnxEmbedderError as e:
-            raise EmbeddingError(str(e)) from e
-
-    model = _load_model()
     vectors = model.encode(
         cleaned,
         batch_size=batch_size,
@@ -244,8 +228,4 @@ async def embed_query(query: str) -> List[float]:
 
 def preload() -> None:
     """Force the model to load now instead of on the first request. Call at app startup."""
-    if settings.EMBEDDING_BACKEND == "onnx":
-        from retrieval import onnx_embedder
-        onnx_embedder.preload(settings.EMBEDDING_ONNX_DIR, settings.EMBEDDING_MAX_SEQ_LENGTH)
-        return
     _load_model()
