@@ -94,19 +94,6 @@ class Settings(BaseSettings):
     EMBEDDING_BATCH_SIZE: int = 32
     EMBEDDING_MAX_SEQ_LENGTH: int = 256
 
-    # torch | onnx — which runtime encodes text into vectors (retrieval/embeddings.py).
-    # Default "torch" preserves exact current behavior (SentenceTransformer,
-    # unchanged). "onnx" runs the identical weights (see
-    # scripts/export_onnx_embedder.py + scripts/verify_onnx_embedder.py,
-    # verified numerically equivalent: cosine_sim=1.0, max_abs_diff=0.0
-    # across English/Hindi/empty/long-truncated test cases) through
-    # onnxruntime + tokenizers instead of torch + sentence-transformers +
-    # transformers — ~600MB lighter at runtime, no model-quality change.
-    # Opt-in, matching this file's other feature-flag defaults, so nothing
-    # about today's deployments changes unless explicitly configured.
-    EMBEDDING_BACKEND: str = "torch"
-    EMBEDDING_ONNX_DIR: str = "data/onnx_embedder"
-
     # Coalesces concurrent embed_query() calls arriving within a short
     # window into one batched model.encode() call — GPU/MPS inference
     # throughput benefits significantly from batching over one-vector-at-
