@@ -108,7 +108,10 @@ def _encode_sync(texts: List[str], batch_size: int) -> List[List[float]]:
         from retrieval import onnx_embedder
         try:
             return onnx_embedder.encode(
-                cleaned, model_dir=settings.EMBEDDING_ONNX_DIR, max_seq_length=settings.EMBEDDING_MAX_SEQ_LENGTH
+                cleaned,
+                model_dir=settings.EMBEDDING_ONNX_DIR,
+                max_seq_length=settings.EMBEDDING_MAX_SEQ_LENGTH,
+                batch_size=batch_size,
             )
         except onnx_embedder.OnnxEmbedderError as e:
             raise EmbeddingError(str(e)) from e
