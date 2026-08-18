@@ -10,9 +10,11 @@ long passages + edge cases) using both cosine similarity (retrieval cares
 about direction, not magnitude) and max absolute per-dimension difference.
 
 Usage:
-    python scripts/verify_onnx_embedder.py
+    python scripts/verify_onnx_embedder.py               # fp32 export vs original (exact-match bar)
+    python scripts/verify_onnx_embedder.py --quantized    # quantized export vs original (drift bar)
 """
 
+import argparse
 import logging
 import sys
 from pathlib import Path
@@ -26,7 +28,7 @@ from retrieval import onnx_embedder  # noqa: E402
 
 logging.basicConfig(level=logging.WARNING)  # keep sentence-transformers/torch quiet
 
-ONNX_DIR = str(Path(__file__).resolve().parent.parent / "data" / "onnx_embedder")
+ROOT = Path(__file__).resolve().parent.parent
 
 TEST_SENTENCES = [
     "Who discovered penicillin?",
@@ -43,6 +45,25 @@ TEST_SENTENCES = [
 
 
 def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--quantized", action="store_true", help="verify data/onnx_embedder_quantized instead of the fp32 export")
+    args = parser.parse_args()
+
+    if args.quantized:
+        onnx_dir = str(ROOT / "data" / "onnx_embedder_quantized")
+        # Real quantization error, not float32 op-ordering noise — a much
+        # looser bar than the fp32-vs-fp32 check below. Dynamic int8
+        # quantization of small transformer encoders like this one typically
+        # lands well inside this range; a failure here means the quantized
+        # model has diverged enough to actually hurt retrieval, not just
+        # accumulated rounding error.
+        cos_sim_threshold = 0.98
+        max_abs_diff_threshold = 0.20
+    else:
+        onnx_dir = str(ROOT / "data" / "onnx_embedder")
+        cos_sim_threshold = 0.9999
+        max_abs_diff_threshold = 0.01
+
     print(f"Loading original SentenceTransformer('{settings.EMBEDDING_MODEL}') ...")
     from sentence_transformers import SentenceTransformer
 
@@ -56,9 +77,9 @@ def main() -> int:
         cleaned, batch_size=32, normalize_embeddings=True, convert_to_numpy=True, show_progress_bar=False
     )
 
-    print("Encoding with ONNX model...")
+    print(f"Encoding with ONNX model ({onnx_dir})...")
     onnx_vectors = np.array(
-        onnx_embedder.encode(cleaned, model_dir=ONNX_DIR, max_seq_length=settings.EMBEDDING_MAX_SEQ_LENGTH)
+        onnx_embedder.encode(cleaned, model_dir=onnx_dir, max_seq_length=settings.EMBEDDING_MAX_SEQ_LENGTH)
     )
 
     if original_vectors.shape != onnx_vectors.shape:
@@ -81,12 +102,9 @@ def main() -> int:
     print(f"\nWorst cosine similarity: {worst_cos_sim:.6f}")
     print(f"Worst max-abs-diff:      {worst_diff:.6f}")
 
-    # Thresholds: fp32 ONNX vs fp32 PyTorch should agree to numerical-noise
-    # level (float32 op-ordering differences), not approximation level.
-    # 0.9999 cosine / 0.01 max-abs-diff is a real bar, not a rubber stamp.
-    ok = worst_cos_sim >= 0.9999 and worst_diff <= 0.01
+    ok = worst_cos_sim >= cos_sim_threshold and worst_diff <= max_abs_diff_threshold
     print("\n" + ("PASS" if ok else "FAIL") + " — " + (
-        "ONNX output is numerically equivalent to the original model."
+        f"ONNX output matches the original model within the {'quantization-drift' if args.quantized else 'numerical-equivalence'} bar."
         if ok else
         "ONNX output diverges too much from the original model — DO NOT wire this in yet."
     ))

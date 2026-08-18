@@ -101,16 +101,7 @@ def get_dimension(model_dir: str, max_seq_length: int) -> int:
     return hidden_size
 
 
-def encode(
-    texts: List[str],
-    model_dir: str,
-    max_seq_length: int,
-) -> List[List[float]]:
-    """Tokenize -> ONNX forward pass -> mean-pool -> L2-normalize. Preserves input order."""
-    if not texts:
-        return []
-
-    _load(model_dir, max_seq_length)
+def _encode_batch(texts: List[str]) -> np.ndarray:
     assert _tokenizer is not None and _session is not None
 
     encodings = _tokenizer.encode_batch(texts)
@@ -133,5 +124,30 @@ def encode(
     last_hidden_state = outputs[0]
     pooled = _mean_pool(last_hidden_state, attention_mask)
     norms = np.clip(np.linalg.norm(pooled, axis=1, keepdims=True), a_min=1e-9, a_max=None)
-    normalized = pooled / norms
+    return pooled / norms
+
+
+def encode(
+    texts: List[str],
+    model_dir: str,
+    max_seq_length: int,
+    batch_size: int = 32,
+) -> List[List[float]]:
+    """Tokenize -> ONNX forward pass -> mean-pool -> L2-normalize. Preserves input order.
+
+    Chunks into batch_size-sized groups rather than running the whole input through
+    one forward pass — a single-shot batch scales activation memory linearly with
+    input size (e.g. thousands of chunks during bulk ingestion), which has been
+    observed to exhaust available memory and get the process silently killed by the
+    OS (no Python exception, since it's an OOM kill, not a caught error). Mirrors the
+    torch path (retrieval/embeddings.py's model.encode(..., batch_size=...)), which
+    already batches internally.
+    """
+    if not texts:
+        return []
+
+    _load(model_dir, max_seq_length)
+
+    pooled_batches = [_encode_batch(texts[i : i + batch_size]) for i in range(0, len(texts), batch_size)]
+    normalized = np.concatenate(pooled_batches, axis=0) if len(pooled_batches) > 1 else pooled_batches[0]
     return normalized.tolist()
